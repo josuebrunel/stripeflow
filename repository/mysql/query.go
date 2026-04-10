@@ -111,7 +111,7 @@ func CheckActiveSubscriptionQuery(userID string) bob.Query {
 		sm.Columns(mysql.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(mysql.Quote("user_id").EQ(mysql.Arg(userID)).
-			And(mysql.Quote("status").EQ(mysql.Arg("active"))).
+			And(mysql.Quote("status").In(mysql.Arg("active", "trialing"))).
 			And(mysql.Quote("date_renewal").GT(mysql.Arg(time.Now().UTC())))),
 	)
 }
@@ -121,7 +121,7 @@ func CheckSubscriptionUsageQuery(userID string) bob.Query {
 		sm.Columns(mysql.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(mysql.Quote("user_id").EQ(mysql.Arg(userID)).
-			And(mysql.Quote("status").EQ(mysql.Arg("active"))).
+			And(mysql.Quote("status").In(mysql.Arg("active", "trialing"))).
 			And(mysql.Quote("usage_desc").GT(mysql.Arg(0))).
 			And(mysql.Quote("date_renewal").GT(mysql.Arg(time.Now().UTC())))),
 	)

@@ -206,7 +206,10 @@ func (h *Handler) Webhook(w http.ResponseWriter, r *http.Request) {
 			xlog.Error("Error unmarshaling subscription", "error", err)
 			break
 		}
-		xlog.Info("Subscription updated", "subscription", subscription.ID, "customer", subscription.Customer.ID)
+		err = h.svc.HandleSubscriptionUpdated(r.Context(), &subscription)
+		if err != nil {
+			xlog.Error("Error handling subscription updated", "error", err)
+		}
 	case stripe.EventTypeCustomerSubscriptionDeleted:
 		var subscription stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &subscription); err != nil {

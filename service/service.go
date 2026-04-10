@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"stripeflow/db/models"
 	"stripeflow/repository"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,7 +146,7 @@ func (s *Service) HandleInvoicePaid(ctx context.Context, invoice *stripe.Invoice
 		StripePriceID:        stPrice.ID,
 		UserID:               userID,
 		PlanName:             plan.Name,
-		Status:               "active",
+		Status:               string(stSub.Status),
 		UsageDesc:            plan.MaxDescriptions,
 		UsagePhotos:          plan.MaxPhotos,
 		DateStart:            time.Unix(dateStart, 0).UTC(),
@@ -159,6 +160,66 @@ func (s *Service) HandleInvoicePaid(ctx context.Context, invoice *stripe.Invoice
 	}
 
 	xlog.Info("User subscription created/updated", "subscription_id", stSubID, "user_id", userID)
+	return nil
+}
+
+func (s *Service) HandleSubscriptionUpdated(ctx context.Context, stSub *stripe.Subscription) error {
+	dbSub, err := s.repo.FindSubscriptionByStripeID(ctx, stSub.ID, stSub.Customer.ID)
+	if err != nil && !strings.Contains(err.Error(), "no rows in result set") {
+		return fmt.Errorf("error finding subscription %s: %w", stSub.ID, err)
+	}
+
+	if len(stSub.Items.Data) == 0 {
+		return fmt.Errorf("no items in stripe subscription %s", stSub.ID)
+	}
+
+	stItem := stSub.Items.Data[len(stSub.Items.Data)-1]
+	stPrice := stItem.Price
+
+	plan, err := s.repo.FindPlan(ctx, stPrice.ID)
+	if err != nil {
+		return fmt.Errorf("error finding plan %s: %w", stPrice.ID, err)
+	}
+
+	var userID string
+	if dbSub != nil {
+		userID = dbSub.UserID
+	} else if stSub.Metadata != nil {
+		userID = stSub.Metadata["user_id"]
+	}
+
+	if userID == "" {
+		return fmt.Errorf("no user_id found for subscription %s", stSub.ID)
+	}
+
+	usageDesc := plan.MaxDescriptions
+	usagePhotos := plan.MaxPhotos
+
+	if dbSub != nil && dbSub.StripePriceID == stPrice.ID {
+		usageDesc = dbSub.UsageDesc
+		usagePhotos = dbSub.UsagePhotos
+	}
+
+	sub := &models.Subscription{
+		StripeCustomerID:     stSub.Customer.ID,
+		StripeSubscriptionID: stSub.ID,
+		StripePriceID:        stPrice.ID,
+		UserID:               userID,
+		PlanName:             plan.Name,
+		Status:               string(stSub.Status),
+		UsageDesc:            usageDesc,
+		UsagePhotos:          usagePhotos,
+		DateStart:            time.Unix(stItem.CurrentPeriodStart, 0).UTC(),
+		DateEnd:              time.Unix(stItem.CurrentPeriodEnd, 0).UTC(),
+		DateRenewal:          time.Unix(stItem.CurrentPeriodEnd, 0).UTC(),
+	}
+
+	_, err = s.repo.UpsertSubscription(ctx, sub)
+	if err != nil {
+		return fmt.Errorf("error updating subscription: %w", err)
+	}
+
+	xlog.Info("Subscription updated in db", "subscription_id", stSub.ID, "user_id", userID)
 	return nil
 }
 

@@ -113,7 +113,7 @@ func CheckActiveSubscriptionQuery(userID string) bob.Query {
 		sm.Columns(sqlite.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(sqlite.Quote("user_id").EQ(sqlite.Arg(userID)).
-			And(sqlite.Quote("status").EQ(sqlite.Arg("active"))).
+			And(sqlite.Quote("status").In(sqlite.Arg("active", "trialing"))).
 			And(sqlite.Quote("date_renewal").GT(sqlite.Arg(time.Now().UTC())))),
 	)
 }
@@ -123,7 +123,7 @@ func CheckSubscriptionUsageQuery(userID string) bob.Query {
 		sm.Columns(sqlite.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(sqlite.Quote("user_id").EQ(sqlite.Arg(userID)).
-			And(sqlite.Quote("status").EQ(sqlite.Arg("active"))).
+			And(sqlite.Quote("status").In(sqlite.Arg("active", "trialing"))).
 			And(sqlite.Quote("usage_desc").GT(sqlite.Arg(0))).
 			And(sqlite.Quote("date_renewal").GT(sqlite.Arg(time.Now().UTC())))),
 	)

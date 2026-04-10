@@ -14,8 +14,7 @@ CREATE TABLE stripeflow_plans (
     billing_cycle VARCHAR(50) NOT NULL,
     features JSONB,
     sort_order INTEGER DEFAULT 0,
-    max_descriptions INTEGER DEFAULT 0,
-    max_photos INTEGER DEFAULT 0,
+    metadata JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -28,8 +27,7 @@ CREATE TABLE stripeflow_subscriptions (
     user_id VARCHAR(255) NOT NULL,
     plan_name VARCHAR(255),
     status VARCHAR(50),
-    usage_desc INTEGER DEFAULT 0,
-    usage_photos INTEGER DEFAULT 0,
+    metadata JSONB,
     date_start TIMESTAMP WITH TIME ZONE,
     date_end TIMESTAMP WITH TIME ZONE,
     date_renewal TIMESTAMP WITH TIME ZONE,

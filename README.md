@@ -6,7 +6,7 @@ StripeFlow is a plugable Golang library that helps developers synchronize produc
 
 StripeFlow is designed with flexibility and extensibility in mind:
 
-- **Handler Layer (`handler/`)**: Contains HTTP handlers (using `chi`) for handling checkout, customer portal, and Stripe webhooks. It also provides middleware to protect endpoints by verifying active subscriptions and usages.
+- **Handler Layer (`handler/`)**: Contains HTTP handlers (using `chi`) for handling checkout, customer portal, and Stripe webhooks. It also provides middleware to protect endpoints by verifying active subscriptions.
 - **Service Layer (`service/`)**: Orchestrates business logic, synchronizes Stripe prices, and handles updates from Stripe webhook events.
 - **Repository Layer (`repository/`)**: Defines a `Querier` interface. It leverages `github.com/stephenafamo/bob` to implement dialect-specific queries for Postgres, SQLite, and MySQL.
 - **Migrations (`db/migrations/`)**: Contains SQL migration scripts and uses `github.com/pressly/goose` and `goose.fs` to embed them. Allows calling `MigrateUp` and `MigrateDown`.
@@ -130,7 +130,7 @@ func ProtectedRoute() http.HandlerFunc {
 
 // Ensure the user has an active subscription
 r.With(func(next http.Handler) http.Handler {
-    return handler.SubscriptionActiveMiddleware(sf.Repo, &MyUserResolver{}, false, func(w http.ResponseWriter, r *http.Request) {
+    return handler.SubscriptionActiveMiddleware(sf.Repo, &MyUserResolver{}, func(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Payment Required", http.StatusPaymentRequired)
     })(next)
 }).Get("/protected", ProtectedRoute())

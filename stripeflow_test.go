@@ -68,19 +68,17 @@ func testLibraryOperations(t *testing.T, sf *StripeFlow) {
 		IsActive:        true,
 		BillingCycle:    "month",
 		SortOrder:       1,
-		MaxDescriptions: 10,
-		MaxPhotos:       50,
 	}
 
 	insertedPlan, err := sf.Repo.UpsertPlan(ctx, plan)
-	assert.NoError(t, err)
-	assert.NotNil(t, insertedPlan)
+	require.NoError(t, err)
+	require.NotNil(t, insertedPlan)
 	assert.Equal(t, "test-plan", insertedPlan.Slug)
 
 	// Test Find Plan
 	foundPlan, err := sf.Repo.FindPlan(ctx, "price_123")
-	assert.NoError(t, err)
-	assert.NotNil(t, foundPlan)
+	require.NoError(t, err)
+	require.NotNil(t, foundPlan)
 	assert.Equal(t, "Test Plan", foundPlan.Name)
 
 	// Test Upsert Subscription
@@ -91,29 +89,18 @@ func testLibraryOperations(t *testing.T, sf *StripeFlow) {
 		UserID:               "user-123",
 		PlanName:             "Test Plan",
 		Status:               "active",
-		UsageDesc:            10,
-		UsagePhotos:          50,
 		DateStart:            time.Now().UTC(),
 		DateEnd:              time.Now().AddDate(0, 1, 0).UTC(),
 		DateRenewal:          time.Now().AddDate(0, 1, 0).UTC(),
 	}
 
 	insertedSub, err := sf.Repo.UpsertSubscription(ctx, sub)
-	assert.NoError(t, err)
-	assert.NotNil(t, insertedSub)
-
-	// Test Update Usage
-	err = sf.Repo.UpdateUsage(ctx, "user-123")
-	assert.NoError(t, err)
-
-	updatedSub, err := sf.Repo.FindSubscriptionByUserID(ctx, "user-123")
-	assert.NoError(t, err)
-	assert.NotNil(t, updatedSub)
-	assert.Equal(t, int32(9), updatedSub.UsageDesc)
+	require.NoError(t, err)
+	require.NotNil(t, insertedSub)
 
 	// Test Delete Subscription
-	err = sf.Repo.DeleteSubscription(ctx, updatedSub.ID)
-	assert.NoError(t, err)
+	err = sf.Repo.DeleteSubscription(ctx, insertedSub.ID)
+	require.NoError(t, err)
 
 	deletedSub, err := sf.Repo.FindSubscriptionByUserID(ctx, "user-123")
 	assert.Error(t, err) // Should error because not found

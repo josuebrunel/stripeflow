@@ -9,7 +9,6 @@ import (
 	"github.com/stephenafamo/bob/dialect/mysql"
 	"github.com/stephenafamo/bob/dialect/mysql/im"
 	"github.com/stephenafamo/bob/dialect/mysql/sm"
-	"github.com/stephenafamo/bob/dialect/mysql/um"
 	"github.com/stephenafamo/bob/dialect/mysql/dm"
 	"github.com/stephenafamo/scan"
 	"github.com/google/uuid"
@@ -20,8 +19,8 @@ func UpsertPlanQuery(plan *models.Plan) bob.Query {
 		plan.ID = uuid.NewString()
 	}
 	return mysql.Insert(
-		im.Into("stripeflow_plans", "id", "name", "slug", "stripe_product_id", "stripe_price_id", "description", "price_usd", "is_active", "billing_cycle", "features", "sort_order", "max_descriptions", "max_photos"),
-		im.Values(mysql.Arg(plan.ID, plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID, plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle, plan.Features, plan.SortOrder, plan.MaxDescriptions, plan.MaxPhotos)),
+		im.Into("stripeflow_plans", "id", "name", "slug", "stripe_product_id", "stripe_price_id", "description", "price_usd", "is_active", "billing_cycle", "features", "sort_order", "metadata"),
+		im.Values(mysql.Arg(plan.ID, plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID, plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle, plan.Features, plan.SortOrder, plan.Metadata)),
 		im.OnDuplicateKeyUpdate(
 			im.UpdateCol("name").To(mysql.Raw("VALUES(name)")),
 			im.UpdateCol("slug").To(mysql.Raw("VALUES(slug)")),
@@ -32,8 +31,7 @@ func UpsertPlanQuery(plan *models.Plan) bob.Query {
 			im.UpdateCol("billing_cycle").To(mysql.Raw("VALUES(billing_cycle)")),
 			im.UpdateCol("features").To(mysql.Raw("VALUES(features)")),
 			im.UpdateCol("sort_order").To(mysql.Raw("VALUES(sort_order)")),
-			im.UpdateCol("max_descriptions").To(mysql.Raw("VALUES(max_descriptions)")),
-			im.UpdateCol("max_photos").To(mysql.Raw("VALUES(max_photos)")),
+			im.UpdateCol("metadata").To(mysql.Raw("VALUES(metadata)")),
 			im.UpdateCol("updated_at").To(mysql.Raw("CURRENT_TIMESTAMP")),
 		),
 	)
@@ -59,14 +57,13 @@ func UpsertSubscriptionQuery(sub *models.Subscription) bob.Query {
 		sub.ID = uuid.NewString()
 	}
 	return mysql.Insert(
-		im.Into("stripeflow_subscriptions", "id", "stripe_customer_id", "stripe_subscription_id", "stripe_price_id", "user_id", "plan_name", "status", "usage_desc", "usage_photos", "date_start", "date_end", "date_renewal"),
-		im.Values(mysql.Arg(sub.ID, sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID, sub.UserID, sub.PlanName, sub.Status, sub.UsageDesc, sub.UsagePhotos, sub.DateStart, sub.DateEnd, sub.DateRenewal)),
+		im.Into("stripeflow_subscriptions", "id", "stripe_customer_id", "stripe_subscription_id", "stripe_price_id", "user_id", "plan_name", "status", "metadata", "date_start", "date_end", "date_renewal"),
+		im.Values(mysql.Arg(sub.ID, sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID, sub.UserID, sub.PlanName, sub.Status, sub.Metadata, sub.DateStart, sub.DateEnd, sub.DateRenewal)),
 		im.OnDuplicateKeyUpdate(
 			im.UpdateCol("stripe_price_id").To(mysql.Raw("VALUES(stripe_price_id)")),
 			im.UpdateCol("plan_name").To(mysql.Raw("VALUES(plan_name)")),
 			im.UpdateCol("status").To(mysql.Raw("VALUES(status)")),
-			im.UpdateCol("usage_desc").To(mysql.Raw("VALUES(usage_desc)")),
-			im.UpdateCol("usage_photos").To(mysql.Raw("VALUES(usage_photos)")),
+			im.UpdateCol("metadata").To(mysql.Raw("VALUES(metadata)")),
 			im.UpdateCol("date_start").To(mysql.Raw("VALUES(date_start)")),
 			im.UpdateCol("date_end").To(mysql.Raw("VALUES(date_end)")),
 			im.UpdateCol("date_renewal").To(mysql.Raw("VALUES(date_renewal)")),
@@ -98,31 +95,12 @@ func DeleteSubscriptionQuery(id string) bob.Query {
 	)
 }
 
-func UpdateUsageQuery(userID string) bob.Query {
-	return mysql.Update(
-		um.Table("stripeflow_subscriptions"),
-		um.SetCol("usage_desc").To(mysql.Raw("usage_desc - 1")),
-		um.Where(mysql.Quote("user_id").EQ(mysql.Arg(userID))),
-	)
-}
-
 func CheckActiveSubscriptionQuery(userID string) bob.Query {
 	return mysql.Select(
 		sm.Columns(mysql.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(mysql.Quote("user_id").EQ(mysql.Arg(userID)).
 			And(mysql.Quote("status").In(mysql.Arg("active", "trialing"))).
-			And(mysql.Quote("date_renewal").GT(mysql.Arg(time.Now().UTC())))),
-	)
-}
-
-func CheckSubscriptionUsageQuery(userID string) bob.Query {
-	return mysql.Select(
-		sm.Columns(mysql.F("COUNT", "id")),
-		sm.From("stripeflow_subscriptions"),
-		sm.Where(mysql.Quote("user_id").EQ(mysql.Arg(userID)).
-			And(mysql.Quote("status").In(mysql.Arg("active", "trialing"))).
-			And(mysql.Quote("usage_desc").GT(mysql.Arg(0))).
 			And(mysql.Quote("date_renewal").GT(mysql.Arg(time.Now().UTC())))),
 	)
 }
@@ -173,20 +151,8 @@ func (r *Repository) DeleteSubscription(ctx context.Context, id string) error {
 	return err
 }
 
-func (r *Repository) UpdateUsage(ctx context.Context, userID string) error {
-	q := UpdateUsageQuery(userID)
-	_, err := bob.Exec(ctx, r.db, q)
-	return err
-}
-
 func (r *Repository) CheckActiveSubscription(ctx context.Context, userID string) (bool, error) {
 	q := CheckActiveSubscriptionQuery(userID)
-	count, err := bob.One(ctx, r.db, q, scan.SingleColumnMapper[int64])
-	return count > 0, err
-}
-
-func (r *Repository) CheckSubscriptionUsage(ctx context.Context, userID string) (bool, error) {
-	q := CheckSubscriptionUsageQuery(userID)
 	count, err := bob.One(ctx, r.db, q, scan.SingleColumnMapper[int64])
 	return count > 0, err
 }

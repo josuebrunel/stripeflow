@@ -13,7 +13,5 @@ type Querier interface {
 	FindSubscriptionByUserID(ctx context.Context, userID string) (*models.Subscription, error)
 	FindSubscriptionByStripeID(ctx context.Context, stripeSubID, stripeCustomerID string) (*models.Subscription, error)
 	DeleteSubscription(ctx context.Context, id string) error
-	UpdateUsage(ctx context.Context, userID string) error
 	CheckActiveSubscription(ctx context.Context, userID string) (bool, error)
-	CheckSubscriptionUsage(ctx context.Context, userID string) (bool, error)
 }

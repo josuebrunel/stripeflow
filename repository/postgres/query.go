@@ -9,15 +9,14 @@ import (
 	"github.com/stephenafamo/bob/dialect/psql"
 	"github.com/stephenafamo/bob/dialect/psql/im"
 	"github.com/stephenafamo/bob/dialect/psql/sm"
-	"github.com/stephenafamo/bob/dialect/psql/um"
 	"github.com/stephenafamo/bob/dialect/psql/dm"
 	"github.com/stephenafamo/scan"
 )
 
 func UpsertPlanQuery(plan *models.Plan) bob.Query {
 	return psql.Insert(
-		im.Into("stripeflow_plans", "name", "slug", "stripe_product_id", "stripe_price_id", "description", "price_usd", "is_active", "billing_cycle", "features", "sort_order", "max_descriptions", "max_photos"),
-		im.Values(psql.Arg(plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID, plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle, plan.Features, plan.SortOrder, plan.MaxDescriptions, plan.MaxPhotos)),
+		im.Into("stripeflow_plans", "name", "slug", "stripe_product_id", "stripe_price_id", "description", "price_usd", "is_active", "billing_cycle", "features", "sort_order", "metadata"),
+		im.Values(psql.Arg(plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID, plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle, plan.Features, plan.SortOrder, plan.Metadata)),
 		im.OnConflict("stripe_price_id").DoUpdate(
 			im.SetExcluded("name"),
 			im.SetExcluded("slug"),
@@ -28,8 +27,7 @@ func UpsertPlanQuery(plan *models.Plan) bob.Query {
 			im.SetExcluded("billing_cycle"),
 			im.SetExcluded("features"),
 			im.SetExcluded("sort_order"),
-			im.SetExcluded("max_descriptions"),
-			im.SetExcluded("max_photos"),
+			im.SetExcluded("metadata"),
 			im.SetCol("updated_at").To(psql.Raw("CURRENT_TIMESTAMP")),
 		),
 		im.Returning("*"),
@@ -53,14 +51,13 @@ func GetPlansQuery() bob.Query {
 
 func UpsertSubscriptionQuery(sub *models.Subscription) bob.Query {
 	return psql.Insert(
-		im.Into("stripeflow_subscriptions", "stripe_customer_id", "stripe_subscription_id", "stripe_price_id", "user_id", "plan_name", "status", "usage_desc", "usage_photos", "date_start", "date_end", "date_renewal"),
-		im.Values(psql.Arg(sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID, sub.UserID, sub.PlanName, sub.Status, sub.UsageDesc, sub.UsagePhotos, sub.DateStart, sub.DateEnd, sub.DateRenewal)),
+		im.Into("stripeflow_subscriptions", "stripe_customer_id", "stripe_subscription_id", "stripe_price_id", "user_id", "plan_name", "status", "metadata", "date_start", "date_end", "date_renewal"),
+		im.Values(psql.Arg(sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID, sub.UserID, sub.PlanName, sub.Status, sub.Metadata, sub.DateStart, sub.DateEnd, sub.DateRenewal)),
 		im.OnConflict("stripe_customer_id", "stripe_subscription_id").DoUpdate(
 			im.SetExcluded("stripe_price_id"),
 			im.SetExcluded("plan_name"),
 			im.SetExcluded("status"),
-			im.SetExcluded("usage_desc"),
-			im.SetExcluded("usage_photos"),
+			im.SetExcluded("metadata"),
 			im.SetExcluded("date_start"),
 			im.SetExcluded("date_end"),
 			im.SetExcluded("date_renewal"),
@@ -93,31 +90,12 @@ func DeleteSubscriptionQuery(id string) bob.Query {
 	)
 }
 
-func UpdateUsageQuery(userID string) bob.Query {
-	return psql.Update(
-		um.Table("stripeflow_subscriptions"),
-		um.SetCol("usage_desc").To(psql.Raw("usage_desc - 1")),
-		um.Where(psql.Quote("user_id").EQ(psql.Arg(userID))),
-	)
-}
-
 func CheckActiveSubscriptionQuery(userID string) bob.Query {
 	return psql.Select(
 		sm.Columns(psql.F("COUNT", "id")),
 		sm.From("stripeflow_subscriptions"),
 		sm.Where(psql.Quote("user_id").EQ(psql.Arg(userID)).
 			And(psql.Quote("status").In(psql.Arg("active", "trialing"))).
-			And(psql.Quote("date_renewal").GT(psql.Arg(time.Now().UTC())))),
-	)
-}
-
-func CheckSubscriptionUsageQuery(userID string) bob.Query {
-	return psql.Select(
-		sm.Columns(psql.F("COUNT", "id")),
-		sm.From("stripeflow_subscriptions"),
-		sm.Where(psql.Quote("user_id").EQ(psql.Arg(userID)).
-			And(psql.Quote("status").In(psql.Arg("active", "trialing"))).
-			And(psql.Quote("usage_desc").GT(psql.Arg(0))).
 			And(psql.Quote("date_renewal").GT(psql.Arg(time.Now().UTC())))),
 	)
 }
@@ -160,20 +138,8 @@ func (r *Repository) DeleteSubscription(ctx context.Context, id string) error {
 	return err
 }
 
-func (r *Repository) UpdateUsage(ctx context.Context, userID string) error {
-	q := UpdateUsageQuery(userID)
-	_, err := bob.Exec(ctx, r.db, q)
-	return err
-}
-
 func (r *Repository) CheckActiveSubscription(ctx context.Context, userID string) (bool, error) {
 	q := CheckActiveSubscriptionQuery(userID)
-	count, err := bob.One(ctx, r.db, q, scan.SingleColumnMapper[int64])
-	return count > 0, err
-}
-
-func (r *Repository) CheckSubscriptionUsage(ctx context.Context, userID string) (bool, error) {
-	q := CheckSubscriptionUsageQuery(userID)
 	count, err := bob.One(ctx, r.db, q, scan.SingleColumnMapper[int64])
 	return count > 0, err
 }

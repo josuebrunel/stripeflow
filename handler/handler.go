@@ -30,7 +30,6 @@ const (
 	MetadataPlanID           = "plan_id"
 	MetadataPlanName         = "plan_name"
 	MetadataPlanPrice        = "plan_price"
-	MetadataPlanMaxDesc      = "plan_max_desc"
 	MetadataStripePriceID    = "stripe_price_id"
 	MetadataStripeProductID  = "stripe_product_id"
 	MetadataStripeCustomerID = "stripe_customer_id"
@@ -107,7 +106,6 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		MetadataPlanID:          planID,
 		MetadataPlanName:        plan.Name,
 		MetadataPlanPrice:       strconv.Itoa(int(plan.PriceUsd)),
-		MetadataPlanMaxDesc:     strconv.Itoa(int(plan.MaxDescriptions)),
 		MetadataStripePriceID:   plan.StripePriceID,
 		MetadataStripeProductID: plan.StripeProductID,
 	}

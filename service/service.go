@@ -67,13 +67,17 @@ func (s *Service) SyncPrices(ctx context.Context) error {
 			xlog.Info("Syncing plan", "plan", p.ID)
 
 			sortOrder, _ := strconv.Atoi(p.Metadata["sort_order"])
-			maxDescriptions, _ := strconv.Atoi(p.Metadata["max_descriptions"])
-			maxPhotos, _ := strconv.Atoi(p.Metadata["max_photos"])
 			billingCycle := getBillingCycle(p)
 
 			var features json.RawMessage
 			if err := features.UnmarshalJSON([]byte(p.Metadata["features"])); err != nil {
 				xlog.Error("Error unmarshalling features", "error", err)
+			}
+
+			metadataBytes, err := json.Marshal(p.Metadata)
+			var metadata json.RawMessage
+			if err == nil {
+				metadata = json.RawMessage(metadataBytes)
 			}
 
 			plan := &models.Plan{
@@ -86,14 +90,13 @@ func (s *Service) SyncPrices(ctx context.Context) error {
 				BillingCycle:    billingCycle,
 				Features:        &features,
 				SortOrder:       int32(sortOrder),
-				MaxDescriptions: int32(maxDescriptions),
-				MaxPhotos:       int32(maxPhotos),
+				Metadata:        &metadata,
 			}
 			if p.Product.Description != "" {
 				plan.Description = &p.Product.Description
 			}
 
-			_, err := s.repo.UpsertPlan(ctx, plan)
+			_, err = s.repo.UpsertPlan(ctx, plan)
 			if err != nil {
 				xlog.Error("Error inserting plan", "error", err)
 				return
@@ -140,6 +143,12 @@ func (s *Service) HandleInvoicePaid(ctx context.Context, invoice *stripe.Invoice
 		return fmt.Errorf("error finding plan %s: %w", stPrice.ID, err)
 	}
 
+	metadataBytes, err := json.Marshal(stSub.Metadata)
+	var metadata json.RawMessage
+	if err == nil {
+		metadata = json.RawMessage(metadataBytes)
+	}
+
 	sub := &models.Subscription{
 		StripeCustomerID:     invoice.Customer.ID,
 		StripeSubscriptionID: stSubID,
@@ -147,8 +156,7 @@ func (s *Service) HandleInvoicePaid(ctx context.Context, invoice *stripe.Invoice
 		UserID:               userID,
 		PlanName:             plan.Name,
 		Status:               string(stSub.Status),
-		UsageDesc:            plan.MaxDescriptions,
-		UsagePhotos:          plan.MaxPhotos,
+		Metadata:             &metadata,
 		DateStart:            time.Unix(dateStart, 0).UTC(),
 		DateEnd:              time.Unix(dateEnd, 0).UTC(),
 		DateRenewal:          time.Unix(dateEnd, 0).UTC(),
@@ -192,12 +200,10 @@ func (s *Service) HandleSubscriptionUpdated(ctx context.Context, stSub *stripe.S
 		return fmt.Errorf("no user_id found for subscription %s", stSub.ID)
 	}
 
-	usageDesc := plan.MaxDescriptions
-	usagePhotos := plan.MaxPhotos
-
-	if dbSub != nil && dbSub.StripePriceID == stPrice.ID {
-		usageDesc = dbSub.UsageDesc
-		usagePhotos = dbSub.UsagePhotos
+	metadataBytes, err := json.Marshal(stSub.Metadata)
+	var metadata json.RawMessage
+	if err == nil {
+		metadata = json.RawMessage(metadataBytes)
 	}
 
 	sub := &models.Subscription{
@@ -207,8 +213,7 @@ func (s *Service) HandleSubscriptionUpdated(ctx context.Context, stSub *stripe.S
 		UserID:               userID,
 		PlanName:             plan.Name,
 		Status:               string(stSub.Status),
-		UsageDesc:            usageDesc,
-		UsagePhotos:          usagePhotos,
+		Metadata:             &metadata,
 		DateStart:            time.Unix(stItem.CurrentPeriodStart, 0).UTC(),
 		DateEnd:              time.Unix(stItem.CurrentPeriodEnd, 0).UTC(),
 		DateRenewal:          time.Unix(stItem.CurrentPeriodEnd, 0).UTC(),

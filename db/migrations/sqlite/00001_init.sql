@@ -12,8 +12,7 @@ CREATE TABLE stripeflow_plans (
     billing_cycle TEXT NOT NULL,
     features TEXT,
     sort_order INTEGER DEFAULT 0,
-    max_descriptions INTEGER DEFAULT 0,
-    max_photos INTEGER DEFAULT 0,
+    metadata TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -26,8 +25,7 @@ CREATE TABLE stripeflow_subscriptions (
     user_id TEXT NOT NULL,
     plan_name TEXT,
     status TEXT,
-    usage_desc INTEGER DEFAULT 0,
-    usage_photos INTEGER DEFAULT 0,
+    metadata TEXT,
     date_start DATETIME,
     date_end DATETIME,
     date_renewal DATETIME,

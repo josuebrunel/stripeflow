@@ -7,6 +7,14 @@ StripeFlow is a plugable Golang library that helps developers synchronize produc
 StripeFlow is designed with flexibility and extensibility in mind:
 
 - **Handler Layer (`handler/`)**: Contains HTTP handlers (using `chi`) for handling checkout, customer portal, and Stripe webhooks. It also provides middleware to protect endpoints by verifying active subscriptions.
+
+The following endpoints are exposed by the handler layer:
+
+| Path        | Method | Description |
+| ----------- | ------ | ----------- |
+| `/checkout` | `POST` | Creates a Stripe Checkout session and redirects the user. Requires a `plan_id` in the form data and an active user session. |
+| `/portal`   | `GET`  | Creates a Stripe Billing Portal session for the current user and redirects them. Requires an active user session. |
+| `/webhook`  | `POST` | Receives and processes webhook events from Stripe (e.g., subscription updates, invoice payments). |
 - **Service Layer (`service/`)**: Orchestrates business logic, synchronizes Stripe prices, and handles updates from Stripe webhook events.
 - **Repository Layer (`repository/`)**: Defines a `Querier` interface. It leverages `github.com/stephenafamo/bob` to implement dialect-specific queries for Postgres, SQLite, and MySQL.
 - **Migrations (`db/migrations/`)**: Contains SQL migration scripts and uses `github.com/pressly/goose` and `goose.fs` to embed them. Allows calling `MigrateUp` and `MigrateDown`.

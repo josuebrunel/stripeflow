@@ -11,8 +11,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/josuebrunel/gopkg/assert"
 	"stripeflow/db/migrations"
 	"stripeflow/db/models"
 	"stripeflow/handler"
@@ -34,10 +33,10 @@ func (m *MockUserResolver) GetUserByEmail(ctx context.Context, email string) (st
 
 func setupTestDB(t *testing.T, dialect, dsn string) *sql.DB {
 	db, err := sql.Open(dialect, dsn)
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	err = db.Ping()
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	dialectName := dialect
 	if dialect == "sqlite" {
@@ -50,7 +49,7 @@ func setupTestDB(t *testing.T, dialect, dsn string) *sql.DB {
 	}
 
 	err = migrations.MigrateUp(db, dialectName)
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	return db
 }
@@ -71,15 +70,19 @@ func testLibraryOperations(t *testing.T, sf *StripeFlow) {
 	}
 
 	insertedPlan, err := sf.Repo.UpsertPlan(ctx, plan)
-	require.NoError(t, err)
-	require.NotNil(t, insertedPlan)
-	assert.Equal(t, "test-plan", insertedPlan.Slug)
+	assert.Eq(t, err, nil)
+	if insertedPlan == nil {
+		t.Fatalf("expected not nil but got nil")
+	}
+	assert.Eq(t, "test-plan", insertedPlan.Slug)
 
 	// Test Find Plan
 	foundPlan, err := sf.Repo.FindPlan(ctx, "price_123")
-	require.NoError(t, err)
-	require.NotNil(t, foundPlan)
-	assert.Equal(t, "Test Plan", foundPlan.Name)
+	assert.Eq(t, err, nil)
+	if foundPlan == nil {
+		t.Fatalf("expected not nil but got nil")
+	}
+	assert.Eq(t, "Test Plan", foundPlan.Name)
 
 	// Test Upsert Subscription
 	sub := &models.Subscription{
@@ -95,16 +98,22 @@ func testLibraryOperations(t *testing.T, sf *StripeFlow) {
 	}
 
 	insertedSub, err := sf.Repo.UpsertSubscription(ctx, sub)
-	require.NoError(t, err)
-	require.NotNil(t, insertedSub)
+	assert.Eq(t, err, nil)
+	if insertedSub == nil {
+		t.Fatalf("expected not nil but got nil")
+	}
 
 	// Test Delete Subscription
 	err = sf.Repo.DeleteSubscription(ctx, insertedSub.ID)
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	deletedSub, err := sf.Repo.FindSubscriptionByUserID(ctx, "user-123")
-	assert.Error(t, err) // Should error because not found
-	assert.Nil(t, deletedSub)
+	if err == nil {
+		t.Fatalf("expected error but got nil")
+	}
+	if deletedSub != nil {
+		t.Fatalf("expected nil but got %v", deletedSub)
+	}
 }
 
 func TestSQLite(t *testing.T) {
@@ -118,7 +127,7 @@ func TestSQLite(t *testing.T) {
 
 	resolver := &MockUserResolver{}
 	sf, err := New(cfg, resolver)
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	testLibraryOperations(t, sf)
 }
@@ -151,7 +160,7 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 	}
 
 	sfPg, err := New(pgCfg, &MockUserResolver{})
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	t.Run("Postgres", func(t *testing.T) {
 		testLibraryOperations(t, sfPg)
@@ -168,7 +177,7 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 	}
 
 	sfMysql, err := New(mysqlCfg, &MockUserResolver{})
-	require.NoError(t, err)
+	assert.Eq(t, err, nil)
 
 	t.Run("MySQL", func(t *testing.T) {
 		testLibraryOperations(t, sfMysql)

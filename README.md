@@ -234,6 +234,101 @@ price, err := sf.CreatePrice(ctx, stripeflow.CreatePriceParams{
 })
 ```
 
+### Provision a Full Product from JSON
+
+Use `ProvisionProduct` or `ProvisionProductFromJSON` to create a product and all its prices in a single call. This is ideal for CLI tools, seed scripts, or any workflow where you define your catalogue as JSON.
+
+**Programmatic usage:**
+
+```go
+result, err := sf.ProvisionProduct(ctx, stripeflow.ProvisionParams{
+    Product: stripeflow.ProvisionProductParams{
+        Name:        "My SaaS",
+        Description: "AI-powered analytics platform",
+        MarketingFeatures: []stripeflow.ProvisionFeature{
+            {Name: "Real-time dashboards"},
+            {Name: "Unlimited team members"},
+        },
+        Metadata: map[string]string{"category": "analytics"},
+    },
+    Prices: []stripeflow.ProvisionPriceParams{
+        {
+            Nickname:      "Starter — monthly",
+            Currency:       "usd",
+            BillingScheme: "per_unit",
+            UnitAmount:    2990,
+            Recurring:     &stripeflow.ProvisionRecurringParams{Interval: "month"},
+        },
+        {
+            Nickname:      "Starter — annual (20% off)",
+            Currency:       "usd",
+            BillingScheme: "per_unit",
+            UnitAmount:    28704,
+            Recurring:     &stripeflow.ProvisionRecurringParams{Interval: "year"},
+        },
+    },
+})
+// result.ProductID  → "prod_ABC123"
+// result.Prices[0].PriceID → "price_XYZ001"
+```
+
+**From a JSON file (e.g. in a CLI tool):**
+
+```go
+raw, err := os.ReadFile("product.json")
+if err != nil {
+    log.Fatal(err)
+}
+result, err := sf.ProvisionProductFromJSON(ctx, raw)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Created product %s with %d prices\n", result.ProductID, len(result.Prices))
+```
+
+**Example `product.json`:**
+
+```json
+{
+  "product": {
+    "name": "My SaaS",
+    "description": "AI-powered analytics platform",
+    "metadata": { "category": "analytics" },
+    "marketing_features": [
+      { "name": "Real-time dashboards" },
+      { "name": "Unlimited team members" }
+    ]
+  },
+  "prices": [
+    {
+      "nickname": "Starter — monthly",
+      "currency": "usd",
+      "billing_scheme": "per_unit",
+      "unit_amount": 2990,
+      "recurring": {
+        "interval": "month",
+        "usage_type": "licensed"
+      }
+    },
+    {
+      "nickname": "Metered API calls",
+      "currency": "usd",
+      "billing_scheme": "per_unit",
+      "unit_amount": 1,
+      "recurring": {
+        "interval": "month",
+        "usage_type": "metered",
+        "meter": "mtr_api_calls"
+      },
+      "transform_quantity": {
+        "divide_by": 1000,
+        "round": "up"
+      }
+    }
+  ]
+}
+```
+
 ---
 
 ## Webhooks
@@ -297,6 +392,8 @@ stripeflow.Config{
 | `UpdateProduct(ctx, UpdateProductParams) (*Product, error)` | Update product in Stripe + local |
 | `CreatePrice(ctx, CreatePriceParams) (*Price, error)` | Create price in Stripe + local |
 | `ArchivePrice(ctx, priceID) error` | Archive price in Stripe |
+| `ProvisionProduct(ctx, ProvisionParams) (*ProvisionResult, error)` | Create product + all prices in one call |
+| `ProvisionProductFromJSON(ctx, []byte) (*ProvisionResult, error)` | Same as above, from raw JSON input |
 
 ### Helpers
 

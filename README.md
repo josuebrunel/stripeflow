@@ -1,24 +1,15 @@
 # StripeFlow
 
-StripeFlow is a plugable Golang library that helps developers synchronize products and handle payment flows with Stripe. It provides a structured architecture with isolated models, repositories for different SQL dialects (PostgreSQL, SQLite, MySQL), and service/handler layers.
+StripeFlow is a pluggable Go library for integrating Stripe subscriptions into your application. It handles checkout sessions, billing portal, webhook processing, and subscription state — with support for PostgreSQL, MySQL, and SQLite.
 
-## Architecture
+## Features
 
-StripeFlow is designed with flexibility and extensibility in mind:
-
-- **Handler Layer (`handler/`)**: Contains HTTP handlers (using `chi`) for handling checkout, customer portal, and Stripe webhooks. It also provides middleware to protect endpoints by verifying active subscriptions.
-
-The following endpoints are exposed by the handler layer:
-
-| Path        | Method | Description |
-| ----------- | ------ | ----------- |
-| `/checkout` | `POST` | Creates a Stripe Checkout session and redirects the user. Requires a `plan_id` in the form data and an active user session. |
-| `/portal`   | `GET`  | Creates a Stripe Billing Portal session for the current user and redirects them. Requires an active user session. |
-| `/webhook`  | `POST` | Receives and processes webhook events from Stripe (e.g., subscription updates, invoice payments). |
-- **Service Layer (`service/`)**: Orchestrates business logic, synchronizes Stripe prices, and handles updates from Stripe webhook events.
-- **Repository Layer (`repository/`)**: Defines a `Querier` interface. It leverages `github.com/stephenafamo/bob` to implement dialect-specific queries for Postgres, SQLite, and MySQL.
-- **Migrations (`db/migrations/`)**: Contains SQL migration scripts and uses `github.com/pressly/goose` and `goose.fs` to embed them. Allows calling `MigrateUp` and `MigrateDown`.
-- **Models (`db/models/`)**: Defines the data structures for `Plan` and `Subscription`.
+- **Checkout & Portal** — pre-built HTTP handlers for Stripe Checkout and Billing Portal
+- **Webhook processing** — handles subscription lifecycle events (`invoice.paid`, `customer.subscription.updated/deleted`)
+- **Plan syncing** — syncs Stripe prices to a local database
+- **Subscription middleware** — protect routes by requiring an active subscription
+- **Multi-dialect** — works with PostgreSQL, MySQL, and SQLite
+- **Zero framework dependency** — uses stdlib `net/http` and `log/slog`
 
 ## Installation
 
@@ -28,126 +19,204 @@ go get stripeflow
 
 ## Quick Start
 
-### 1. Migrations
+### 1. Run Migrations
 
-StripeFlow uses Goose to manage embedded schema migrations. You can use `MigrateUp` and `MigrateDown` to run the required table creation.
-Example:
+StripeFlow uses embedded Goose migrations to create the required tables.
 
 ```go
-package main
-
 import (
-	"database/sql"
-	"log"
-	"stripeflow/db/migrations"
-	_ "github.com/lib/pq"
+    "database/sql"
+    "log"
+
+    _ "github.com/lib/pq"
+    "stripeflow/migrations"
 )
 
 func main() {
-	db, err := sql.Open("postgres", "postgres://user:pass@localhost:5432/dbname?sslmode=disable")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
+    db, err := sql.Open("postgres", "postgres://user:pass@localhost:5432/dbname?sslmode=disable")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
 
-	if err := migrations.MigrateUp(db, "postgres"); err != nil {
-		log.Fatalf("Migration failed: %v", err)
-	}
+    if err := migrations.MigrateUp(db, "postgres"); err != nil {
+        log.Fatalf("migration failed: %v", err)
+    }
 }
 ```
 
-### 2. Initialization & Configuration
+### 2. Implement UserResolver
 
-StripeFlow uses `github.com/josuebrunel/gopkg/xenv` for environment variables. Ensure the following are set:
-- `STRIPEFLOW_STRIPE_SECRET_KEY`
-- `STRIPEFLOW_STRIPE_WEBHOOK_SECRET`
-- `STRIPEFLOW_CHECKOUT_REDIRECT`
-
-You also need to provide a user resolver conforming to `handler.UserDetailsResolver` so StripeFlow can associate subscriptions to your local application users.
+StripeFlow needs a way to identify users in your application:
 
 ```go
-package main
-
 import (
-	"context"
-	"database/sql"
-	"log"
-	"net/http"
-
-	"github.com/go-chi/chi/v5"
-	"stripeflow"
-	"stripeflow/handler"
-	_ "github.com/lib/pq" // or your choice of driver
+    "context"
+    "stripeflow"
 )
 
-// MyUserResolver implements handler.UserDetailsResolver
-type MyUserResolver struct{}
+type MyUserResolver struct {
+    // your auth/session dependencies
+}
 
-func (r *MyUserResolver) GetUser(ctx context.Context) (string, error) {
+func (r *MyUserResolver) GetUserID(ctx context.Context) (string, error) {
     return "user-id-from-session", nil
 }
 
-func (r *MyUserResolver) GetUserDetails(ctx context.Context) (*handler.User, error) {
-    return &handler.User{ID: "user-id", Email: "test@example.com"}, nil
+func (r *MyUserResolver) GetUserEmail(ctx context.Context) (string, error) {
+    return "user@example.com", nil
 }
 
-func (r *MyUserResolver) GetUserByEmail(ctx context.Context, email string) (string, error) {
+func (r *MyUserResolver) FindUserIDByEmail(ctx context.Context, email string) (string, error) {
     return "user-id", nil
 }
-
-func main() {
-	db, _ := sql.Open("postgres", "...")
-	defer db.Close()
-
-	cfg := stripeflow.Config{
-		Dialect: "postgres", // 'postgres', 'sqlite', or 'mysql'
-		DB:      db,
-	}
-
-	sf, err := stripeflow.New(cfg, &MyUserResolver{})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// You can trigger a sync of Stripe prices manually or on a cron
-	sf.Service.SyncPrices(context.Background())
-
-	// Mount the HTTP handlers
-	r := chi.NewRouter()
-
-	// Handles:
-	// POST /checkout (requires user session)
-	// GET /portal (requires user session)
-	// POST /webhook (receives Stripe events)
-	sf.Handler.Mount(r)
-
-	http.ListenAndServe(":8080", r)
-}
 ```
 
-### 3. Middleware
-
-To protect routes in your application using StripeFlow:
+### 3. Initialize & Mount
 
 ```go
-func ProtectedRoute() http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        w.Write([]byte("You have an active subscription!"))
+import (
+    "context"
+    "database/sql"
+    "log"
+    "net/http"
+
+    _ "github.com/lib/pq"
+    "stripeflow"
+)
+
+func main() {
+    db, _ := sql.Open("postgres", "...")
+    defer db.Close()
+
+    sf, err := stripeflow.New(stripeflow.Config{
+        Dialect:         "postgres",  // "postgres", "mysql", "sqlite"
+        DB:              db,
+        StripeSecretKey: "sk_...",
+        WebhookSecret:   "whsec_...",
+        RedirectURL:     "https://example.com/account",
+    }, &MyUserResolver{})
+    if err != nil {
+        log.Fatal(err)
     }
+
+    // Sync Stripe prices to local DB
+    sf.SyncPrices(context.Background())
+
+    mux := http.NewServeMux()
+
+    // Mount StripeFlow handlers:
+    //   POST /stripe/checkout
+    //   GET  /stripe/portal
+    //   POST /stripe/webhook
+    mux.Handle("/stripe/", http.StripPrefix("/stripe", sf.Handler()))
+
+    // Protect routes with subscription middleware
+    protected := sf.RequireSubscription(func(w http.ResponseWriter, r *http.Request) {
+        http.Error(w, "Payment Required", http.StatusPaymentRequired)
+    })
+    mux.Handle("/dashboard", protected(http.HandlerFunc(dashboardHandler)))
+
+    log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
-// Ensure the user has an active subscription
-r.With(func(next http.Handler) http.Handler {
-    return handler.SubscriptionActiveMiddleware(sf.Repo, &MyUserResolver{}, func(w http.ResponseWriter, r *http.Request) {
-        http.Error(w, "Payment Required", http.StatusPaymentRequired)
-    })(next)
-}).Get("/protected", ProtectedRoute())
+func dashboardHandler(w http.ResponseWriter, r *http.Request) {
+    w.Write([]byte("Welcome, subscriber!"))
+}
 ```
+
+### 4. Usage-Based Restrictions
+
+If your Stripe products have usage limits in their metadata (e.g., `"max_api_calls": "1000"`), use `RequireUsage` or `CheckUsage` with a custom check function:
+
+```go
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "strconv"
+    "net/http"
+
+    "stripeflow"
+)
+
+// Your custom usage check — you control the logic entirely.
+func checkAPICalls(ctx context.Context, sub *stripeflow.Subscription, plan *stripeflow.Plan) error {
+    // Extract limit from plan metadata (synced from Stripe)
+    limit := extractMetadataInt(plan.Metadata, "max_api_calls")
+    if limit == 0 {
+        return nil // no limit set, allow
+    }
+
+    // Count usage from YOUR data store
+    used := countUserAPICalls(ctx, sub.UserID) // your logic
+    if used >= limit {
+        return fmt.Errorf("API call limit reached (%d/%d)", used, limit)
+    }
+    return nil
+}
+
+func extractMetadataInt(raw *json.RawMessage, key string) int64 {
+    if raw == nil {
+        return 0
+    }
+    var m map[string]string
+    json.Unmarshal(*raw, &m)
+    v, _ := strconv.ParseInt(m[key], 10, 64)
+    return v
+}
+
+// As middleware:
+mux.Handle("/api/", sf.RequireUsage(checkAPICalls, func(w http.ResponseWriter, r *http.Request) {
+    http.Error(w, "Usage limit exceeded", http.StatusTooManyRequests)
+})(http.HandlerFunc(apiHandler)))
+
+// Or programmatically:
+err := sf.CheckUsage(ctx, userID, checkAPICalls)
+if err != nil {
+    // usage limit exceeded
+}
+```
+
+## API
+
+### StripeFlow Methods
+
+| Method | Description |
+|--------|-------------|
+| `Handler() http.Handler` | Returns an HTTP handler with checkout, portal, and webhook endpoints |
+| `RequireSubscription(fallback) func(http.Handler) http.Handler` | Middleware that requires an active subscription |
+| `RequireUsage(check, fallback) func(http.Handler) http.Handler` | Middleware that checks usage limits via a custom function |
+| `CheckUsage(ctx, userID, check) error` | Programmatic usage check (non-middleware) |
+| `SyncPrices(ctx) error` | Syncs all Stripe prices to the local database |
+| `GetPlans(ctx) ([]Plan, error)` | Returns all active plans |
+| `FindPlan(ctx, priceID) (*Plan, error)` | Finds a plan by Stripe price ID |
+| `GetSubscription(ctx, userID) (*Subscription, error)` | Returns the user's latest subscription |
+| `HasActiveSubscription(ctx, userID) (bool, error)` | Checks if a user has an active subscription |
+
+### HTTP Endpoints
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/checkout` | `POST` | Creates a Stripe Checkout session. Requires `plan_id` in form data. |
+| `/portal` | `GET` | Creates a Stripe Billing Portal session for the current user. |
+| `/webhook` | `POST` | Receives and processes Stripe webhook events. |
+
+### Environment
+
+Set these before initializing, or pass them directly via `Config`:
+
+| Variable | Description |
+|----------|-------------|
+| `STRIPE_SECRET_KEY` | Your Stripe secret API key |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
 
 ## Running Tests
 
-StripeFlow includes unit tests and Docker-based integration tests. To run them:
-
 ```sh
+# Unit tests (SQLite in-memory)
 go test -v ./...
+
+# Integration tests (requires Docker)
+go test -v -run TestPostgresAndMySQLIntegration ./...
 ```

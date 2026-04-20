@@ -1,4 +1,4 @@
-module stripeflow
+module github.com/josuebrunel/stripeflow
 
 go 1.25.4
 

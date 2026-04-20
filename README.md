@@ -16,7 +16,7 @@ StripeFlow is a pluggable Go library for integrating Stripe subscriptions into a
 ## Installation
 
 ```sh
-go get stripeflow
+go get github.com/josuebrunel/stripeflow
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ StripeFlow uses embedded Goose migrations to create and version all required tab
 import (
     "database/sql"
     _ "github.com/lib/pq"
-    "stripeflow/migrations"
+    "github.com/josuebrunel/stripeflow/migrations"
 )
 
 db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
@@ -46,7 +46,7 @@ Supported dialect values: `"postgres"`, `"mysql"`, `"sqlite"`.
 ```go
 import (
     "net/http"
-    "stripeflow"
+    "github.com/josuebrunel/stripeflow"
 )
 
 sf, err := stripeflow.New(stripeflow.Config{

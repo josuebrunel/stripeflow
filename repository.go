@@ -9,17 +9,36 @@ import (
 	"github.com/google/uuid"
 )
 
-// queries holds all SQL statements for a given dialect.
+// --------------------------------------------------------------------------
+// SQL query sets per dialect
+// --------------------------------------------------------------------------
+
 type queries struct {
-	upsertPlan       string
-	findPlan         string
-	getPlans         string
-	upsertSub        string
-	findSubByUser    string
-	findSubByStripe  string
-	deleteSub        string
-	checkActiveSub   string
-	hasReturning     bool
+	// Subscriptions
+	upsertSub          string
+	createEmptySub     string
+	findSubByUser      string
+	findSubByCustomer  string
+	findSubByStripeID  string
+	incrementUsage     string
+	setUsageLimit      string
+	resetUsage         string
+
+	// Products
+	upsertProduct string
+	listProducts  string
+
+	// Prices
+	upsertPrice         string
+	listPricesByProduct string
+
+	// Webhook idempotency
+	markEventProcessing string
+	markEventDone       string
+
+	// Dialect hint
+	isPostgres bool
+	isMySQL    bool
 }
 
 func newQueries(dialect string) (queries, error) {
@@ -35,110 +54,303 @@ func newQueries(dialect string) (queries, error) {
 	}
 }
 
-// --- Postgres queries ---
+// --------------------------------------------------------------------------
+// Postgres
+// --------------------------------------------------------------------------
 
 var pgQueries = queries{
-	hasReturning: true,
-	upsertPlan: `
-		INSERT INTO stripeflow_plans
-			(name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (stripe_price_id) DO UPDATE SET
-			name=EXCLUDED.name, slug=EXCLUDED.slug, stripe_product_id=EXCLUDED.stripe_product_id,
-			description=EXCLUDED.description, price_usd=EXCLUDED.price_usd, is_active=EXCLUDED.is_active,
-			billing_cycle=EXCLUDED.billing_cycle, features=EXCLUDED.features, sort_order=EXCLUDED.sort_order,
-			metadata=EXCLUDED.metadata, updated_at=CURRENT_TIMESTAMP
-		RETURNING id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at`,
-	findPlan: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE stripe_price_id = $1`,
-	getPlans: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE is_active = true ORDER BY sort_order`,
+	isPostgres: true,
+
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
-			(stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (stripe_customer_id, stripe_subscription_id) DO UPDATE SET
-			stripe_price_id=EXCLUDED.stripe_price_id, plan_name=EXCLUDED.plan_name, status=EXCLUDED.status,
-			metadata=EXCLUDED.metadata, date_start=EXCLUDED.date_start, date_end=EXCLUDED.date_end,
-			date_renewal=EXCLUDED.date_renewal, updated_at=CURRENT_TIMESTAMP
-		RETURNING id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at`,
-	findSubByUser: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE user_id = $1 ORDER BY date_start DESC LIMIT 1`,
-	findSubByStripe: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE stripe_subscription_id = $1 AND stripe_customer_id = $2`,
-	deleteSub:      `DELETE FROM stripeflow_subscriptions WHERE id = $1`,
-	checkActiveSub: `SELECT COUNT(id) FROM stripeflow_subscriptions WHERE user_id = $1 AND status IN ('active','trialing') AND date_renewal > $2`,
+		    (user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
+		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
+		    stripe_price_id         = EXCLUDED.stripe_price_id,
+		    stripe_product_id       = EXCLUDED.stripe_product_id,
+		    status                  = EXCLUDED.status,
+		    trial_ends_at           = EXCLUDED.trial_ends_at,
+		    current_period_start    = EXCLUDED.current_period_start,
+		    current_period_end      = EXCLUDED.current_period_end,
+		    canceled_at             = EXCLUDED.canceled_at,
+		    updated_at              = NOW()`,
+
+	createEmptySub: `
+		INSERT INTO stripeflow_subscriptions (user_id, status)
+		VALUES ($1, 'none')
+		ON CONFLICT (user_id) DO NOTHING`,
+
+	findSubByUser: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE user_id = $1`,
+
+	findSubByCustomer: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_customer_id = $1`,
+
+	findSubByStripeID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_subscription_id = $1`,
+
+	incrementUsage: `
+		UPDATE stripeflow_subscriptions
+		SET usage_count = usage_count + $2, updated_at = NOW()
+		WHERE user_id = $1
+		RETURNING usage_count`,
+
+	setUsageLimit: `
+		UPDATE stripeflow_subscriptions SET usage_limit = $2, updated_at = NOW() WHERE user_id = $1`,
+
+	resetUsage: `
+		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = $1`,
+
+	upsertProduct: `
+		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,NOW())
+		ON CONFLICT (id) DO UPDATE SET
+		    name              = EXCLUDED.name,
+		    description       = EXCLUDED.description,
+		    active            = EXCLUDED.active,
+		    stripe_created_at = EXCLUDED.stripe_created_at,
+		    updated_at        = NOW()`,
+
+	listProducts: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products`,
+
+	upsertPrice: `
+		INSERT INTO stripeflow_prices
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+		ON CONFLICT (id) DO UPDATE SET
+		    product_id         = EXCLUDED.product_id,
+		    currency           = EXCLUDED.currency,
+		    unit_amount        = EXCLUDED.unit_amount,
+		    recurring_interval = EXCLUDED.recurring_interval,
+		    recurring_count    = EXCLUDED.recurring_count,
+		    active             = EXCLUDED.active,
+		    stripe_created_at  = EXCLUDED.stripe_created_at,
+		    updated_at         = NOW()`,
+
+	listPricesByProduct: `
+		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_prices WHERE product_id = $1 ORDER BY unit_amount ASC`,
+
+	markEventProcessing: `
+		INSERT INTO stripeflow_webhook_events (id, type) VALUES ($1, $2)
+		ON CONFLICT (id) DO NOTHING`,
+
+	markEventDone: `
+		UPDATE stripeflow_webhook_events
+		SET processed = TRUE, error = NULLIF($2,'')
+		WHERE id = $1`,
 }
 
-// --- MySQL queries ---
+// --------------------------------------------------------------------------
+// MySQL
+// --------------------------------------------------------------------------
 
 var myQueries = queries{
-	hasReturning: false,
-	upsertPlan: `
-		INSERT INTO stripeflow_plans
-			(id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		ON DUPLICATE KEY UPDATE
-			name=VALUES(name), slug=VALUES(slug), stripe_product_id=VALUES(stripe_product_id),
-			description=VALUES(description), price_usd=VALUES(price_usd), is_active=VALUES(is_active),
-			billing_cycle=VALUES(billing_cycle), features=VALUES(features), sort_order=VALUES(sort_order),
-			metadata=VALUES(metadata), updated_at=CURRENT_TIMESTAMP`,
-	findPlan: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE stripe_price_id = ?`,
-	getPlans: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE is_active = true ORDER BY sort_order`,
+	isMySQL: true,
+
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
-			(id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal)
+		    (id, user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE
-			stripe_price_id=VALUES(stripe_price_id), plan_name=VALUES(plan_name), status=VALUES(status),
-			metadata=VALUES(metadata), date_start=VALUES(date_start), date_end=VALUES(date_end),
-			date_renewal=VALUES(date_renewal), updated_at=CURRENT_TIMESTAMP`,
-	findSubByUser: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE user_id = ? ORDER BY date_start DESC LIMIT 1`,
-	findSubByStripe: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ? AND stripe_customer_id = ?`,
-	deleteSub:      `DELETE FROM stripeflow_subscriptions WHERE id = ?`,
-	checkActiveSub: `SELECT COUNT(id) FROM stripeflow_subscriptions WHERE user_id = ? AND status IN ('active','trialing') AND date_renewal > ?`,
+		    stripe_customer_id      = VALUES(stripe_customer_id),
+		    stripe_subscription_id  = VALUES(stripe_subscription_id),
+		    stripe_price_id         = VALUES(stripe_price_id),
+		    stripe_product_id       = VALUES(stripe_product_id),
+		    status                  = VALUES(status),
+		    trial_ends_at           = VALUES(trial_ends_at),
+		    current_period_start    = VALUES(current_period_start),
+		    current_period_end      = VALUES(current_period_end),
+		    canceled_at             = VALUES(canceled_at),
+		    updated_at              = CURRENT_TIMESTAMP`,
+
+	createEmptySub: `
+		INSERT IGNORE INTO stripeflow_subscriptions (id, user_id, status) VALUES (?,?,'none')`,
+
+	findSubByUser: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE user_id = ?`,
+
+	findSubByCustomer: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_customer_id = ?`,
+
+	findSubByStripeID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ?`,
+
+	incrementUsage: `
+		UPDATE stripeflow_subscriptions SET usage_count = usage_count + ?, updated_at = NOW() WHERE user_id = ?`,
+
+	setUsageLimit: `
+		UPDATE stripeflow_subscriptions SET usage_limit = ?, updated_at = NOW() WHERE user_id = ?`,
+
+	resetUsage: `
+		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = ?`,
+
+	upsertProduct: `
+		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,NOW())
+		ON DUPLICATE KEY UPDATE
+		    name = VALUES(name), description = VALUES(description),
+		    active = VALUES(active), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
+
+	listProducts: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products`,
+
+	upsertPrice: `
+		INSERT INTO stripeflow_prices
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,NOW())
+		ON DUPLICATE KEY UPDATE
+		    product_id = VALUES(product_id), currency = VALUES(currency),
+		    unit_amount = VALUES(unit_amount), recurring_interval = VALUES(recurring_interval),
+		    recurring_count = VALUES(recurring_count), active = VALUES(active),
+		    stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
+
+	listPricesByProduct: `
+		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
+
+	markEventProcessing: `
+		INSERT IGNORE INTO stripeflow_webhook_events (id, type) VALUES (?,?)`,
+
+	markEventDone: `
+		UPDATE stripeflow_webhook_events SET processed = TRUE, error = NULLIF(?,''  ) WHERE id = ?`,
 }
 
-// --- SQLite queries ---
+// --------------------------------------------------------------------------
+// SQLite
+// --------------------------------------------------------------------------
 
 var slQueries = queries{
-	hasReturning: true,
-	upsertPlan: `
-		INSERT INTO stripeflow_plans
-			(id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT (stripe_price_id) DO UPDATE SET
-			name=EXCLUDED.name, slug=EXCLUDED.slug, stripe_product_id=EXCLUDED.stripe_product_id,
-			description=EXCLUDED.description, price_usd=EXCLUDED.price_usd, is_active=EXCLUDED.is_active,
-			billing_cycle=EXCLUDED.billing_cycle, features=EXCLUDED.features, sort_order=EXCLUDED.sort_order,
-			metadata=EXCLUDED.metadata, updated_at=CURRENT_TIMESTAMP
-		RETURNING id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at`,
-	findPlan: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE stripe_price_id = ?`,
-	getPlans: `SELECT id, name, slug, stripe_product_id, stripe_price_id, description, price_usd, is_active, billing_cycle, features, sort_order, metadata, created_at, updated_at
-		FROM stripeflow_plans WHERE is_active = true ORDER BY sort_order`,
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
-			(id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT (stripe_customer_id, stripe_subscription_id) DO UPDATE SET
-			stripe_price_id=EXCLUDED.stripe_price_id, plan_name=EXCLUDED.plan_name, status=EXCLUDED.status,
-			metadata=EXCLUDED.metadata, date_start=EXCLUDED.date_start, date_end=EXCLUDED.date_end,
-			date_renewal=EXCLUDED.date_renewal, updated_at=CURRENT_TIMESTAMP
-		RETURNING id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at`,
-	findSubByUser: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE user_id = ? ORDER BY date_start DESC LIMIT 1`,
-	findSubByStripe: `SELECT id, stripe_customer_id, stripe_subscription_id, stripe_price_id, user_id, plan_name, status, metadata, date_start, date_end, date_renewal, created_at, updated_at
-		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ? AND stripe_customer_id = ?`,
-	deleteSub:      `DELETE FROM stripeflow_subscriptions WHERE id = ?`,
-	checkActiveSub: `SELECT COUNT(id) FROM stripeflow_subscriptions WHERE user_id = ? AND status IN ('active','trialing') AND date_renewal > ?`,
+		    (user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		ON CONFLICT (user_id) DO UPDATE SET
+		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
+		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
+		    stripe_price_id         = EXCLUDED.stripe_price_id,
+		    stripe_product_id       = EXCLUDED.stripe_product_id,
+		    status                  = EXCLUDED.status,
+		    trial_ends_at           = EXCLUDED.trial_ends_at,
+		    current_period_start    = EXCLUDED.current_period_start,
+		    current_period_end      = EXCLUDED.current_period_end,
+		    canceled_at             = EXCLUDED.canceled_at,
+		    updated_at              = CURRENT_TIMESTAMP`,
+
+	createEmptySub: `
+		INSERT OR IGNORE INTO stripeflow_subscriptions (user_id, status) VALUES (?,'none')`,
+
+	findSubByUser: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE user_id = ?`,
+
+	findSubByCustomer: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_customer_id = ?`,
+
+	findSubByStripeID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ?`,
+
+	incrementUsage: `
+		UPDATE stripeflow_subscriptions SET usage_count = usage_count + ?, updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? RETURNING usage_count`,
+
+	setUsageLimit: `
+		UPDATE stripeflow_subscriptions SET usage_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
+
+	resetUsage: `
+		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
+
+	upsertProduct: `
+		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE SET
+		    name = EXCLUDED.name, description = EXCLUDED.description,
+		    active = EXCLUDED.active, stripe_created_at = EXCLUDED.stripe_created_at,
+		    updated_at = CURRENT_TIMESTAMP`,
+
+	listProducts: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products`,
+
+	upsertPrice: `
+		INSERT INTO stripeflow_prices
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE SET
+		    product_id = EXCLUDED.product_id, currency = EXCLUDED.currency,
+		    unit_amount = EXCLUDED.unit_amount, recurring_interval = EXCLUDED.recurring_interval,
+		    recurring_count = EXCLUDED.recurring_count, active = EXCLUDED.active,
+		    stripe_created_at = EXCLUDED.stripe_created_at, updated_at = CURRENT_TIMESTAMP`,
+
+	listPricesByProduct: `
+		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
+
+	markEventProcessing: `
+		INSERT OR IGNORE INTO stripeflow_webhook_events (id, type) VALUES (?,?)`,
+
+	markEventDone: `
+		UPDATE stripeflow_webhook_events SET processed = 1, error = NULLIF(?,''  ) WHERE id = ?`,
 }
 
-// --- Repository ---
+// --------------------------------------------------------------------------
+// Repository
+// --------------------------------------------------------------------------
 
 type repository struct {
 	db      *sql.DB
@@ -154,95 +366,222 @@ func newRepository(db *sql.DB, dialect string) (*repository, error) {
 	return &repository{db: db, q: q, dialect: dialect}, nil
 }
 
-func (r *repository) upsertPlan(ctx context.Context, plan *Plan) (*Plan, error) {
-	var args []any
-	if r.dialect == "postgres" {
-		args = []any{plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID,
-			plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle,
-			plan.Features, plan.SortOrder, plan.Metadata}
+// --------------------------------------------------------------------------
+// Subscription helpers
+// --------------------------------------------------------------------------
+
+type upsertSubParams struct {
+	UserID               string
+	StripeCustomerID     string
+	StripeSubscriptionID string
+	StripePriceID        string
+	StripeProductID      string
+	Status               SubscriptionStatus
+	TrialEndsAt          *time.Time
+	CurrentPeriodStart   *time.Time
+	CurrentPeriodEnd     *time.Time
+	CanceledAt           *time.Time
+}
+
+func (r *repository) upsertSubscription(ctx context.Context, p upsertSubParams) error {
+	var err error
+	if r.q.isMySQL {
+		id := uuid.NewString()
+		_, err = r.db.ExecContext(ctx, r.q.upsertSub,
+			id, p.UserID, nullStr(p.StripeCustomerID), nullStr(p.StripeSubscriptionID),
+			nullStr(p.StripePriceID), nullStr(p.StripeProductID),
+			string(p.Status),
+			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt,
+		)
 	} else {
-		if plan.ID == "" {
-			plan.ID = uuid.NewString()
+		_, err = r.db.ExecContext(ctx, r.q.upsertSub,
+			p.UserID, nullStr(p.StripeCustomerID), nullStr(p.StripeSubscriptionID),
+			nullStr(p.StripePriceID), nullStr(p.StripeProductID),
+			string(p.Status),
+			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt,
+		)
+	}
+	return err
+}
+
+func (r *repository) createEmptySubscription(ctx context.Context, userID string) error {
+	if r.q.isMySQL {
+		_, err := r.db.ExecContext(ctx, r.q.createEmptySub, uuid.NewString(), userID)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, r.q.createEmptySub, userID)
+	return err
+}
+
+func (r *repository) scanSubscription(row *sql.Row) (*Subscription, error) {
+	sub := &Subscription{}
+	err := row.Scan(
+		&sub.ID, &sub.UserID,
+		&sub.StripeCustomerID, &sub.StripeSubscriptionID,
+		&sub.StripePriceID, &sub.StripeProductID,
+		&sub.Status, &sub.TrialEndsAt, &sub.CurrentPeriodStart, &sub.CurrentPeriodEnd,
+		&sub.CanceledAt, &sub.UsageCount, &sub.UsageLimit,
+		&sub.CreatedAt, &sub.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, ErrNoSubscription
+	}
+	return sub, err
+}
+
+func (r *repository) getSubscriptionByUserID(ctx context.Context, userID string) (*Subscription, error) {
+	return r.scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByUser, userID))
+}
+
+func (r *repository) getSubscriptionByCustomerID(ctx context.Context, customerID string) (*Subscription, error) {
+	return r.scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByCustomer, customerID))
+}
+
+func (r *repository) getSubscriptionByStripeSubID(ctx context.Context, subID string) (*Subscription, error) {
+	return r.scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByStripeID, subID))
+}
+
+func (r *repository) incrementUsage(ctx context.Context, userID string, delta int64) (int64, error) {
+	var count int64
+	if r.q.isMySQL {
+		// MySQL: no RETURNING; args order: (delta, userID)
+		if _, err := r.db.ExecContext(ctx, r.q.incrementUsage, delta, userID); err != nil {
+			return 0, err
 		}
-		args = []any{plan.ID, plan.Name, plan.Slug, plan.StripeProductID, plan.StripePriceID,
-			plan.Description, plan.PriceUsd, plan.IsActive, plan.BillingCycle,
-			plan.Features, plan.SortOrder, plan.Metadata}
+		err := r.db.QueryRowContext(ctx,
+			`SELECT usage_count FROM stripeflow_subscriptions WHERE user_id = ?`, userID,
+		).Scan(&count)
+		return count, err
 	}
-
-	if r.q.hasReturning {
-		return scanPlan(r.db.QueryRowContext(ctx, r.q.upsertPlan, args...))
+	if r.q.isPostgres {
+		// Postgres: RETURNING; args order: (userID, delta)
+		err := r.db.QueryRowContext(ctx, r.q.incrementUsage, userID, delta).Scan(&count)
+		return count, err
 	}
-
-	_, err := r.db.ExecContext(ctx, r.q.upsertPlan, args...)
-	if err != nil {
-		return nil, err
-	}
-	return r.findPlan(ctx, plan.StripePriceID)
+	// SQLite: RETURNING; args order: (delta, userID)
+	err := r.db.QueryRowContext(ctx, r.q.incrementUsage, delta, userID).Scan(&count)
+	return count, err
 }
 
-func (r *repository) findPlan(ctx context.Context, priceID string) (*Plan, error) {
-	return scanPlan(r.db.QueryRowContext(ctx, r.q.findPlan, priceID))
+func (r *repository) setUsageLimit(ctx context.Context, userID string, limit *int64) error {
+	if r.q.isMySQL {
+		_, err := r.db.ExecContext(ctx, r.q.setUsageLimit, limit, userID)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, r.q.setUsageLimit, userID, limit)
+	return err
 }
 
-func (r *repository) getPlans(ctx context.Context) ([]Plan, error) {
-	rows, err := r.db.QueryContext(ctx, r.q.getPlans)
+func (r *repository) resetUsage(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, r.q.resetUsage, userID)
+	return err
+}
+
+// --------------------------------------------------------------------------
+// Product / Price helpers
+// --------------------------------------------------------------------------
+
+func (r *repository) upsertProduct(ctx context.Context, p Product) error {
+	_, err := r.db.ExecContext(ctx, r.q.upsertProduct,
+		p.ID, p.Name, p.Description, p.Active, p.StripeCreatedAt,
+	)
+	return err
+}
+
+func (r *repository) listProducts(ctx context.Context, activeOnly bool) ([]Product, error) {
+	q := r.q.listProducts
+	var args []any
+	if activeOnly {
+		if r.q.isMySQL || !r.q.isPostgres {
+			q += " WHERE active = 1"
+		} else {
+			q += " WHERE active = TRUE"
+		}
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var plans []Plan
+	var products []Product
 	for rows.Next() {
-		p, err := scanPlan(rows)
-		if err != nil {
+		var p Product
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Active,
+			&p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
-		plans = append(plans, *p)
+		products = append(products, p)
 	}
-	return plans, rows.Err()
+	return products, rows.Err()
 }
 
-func (r *repository) upsertSubscription(ctx context.Context, sub *Subscription) (*Subscription, error) {
-	var args []any
-	if r.dialect == "postgres" {
-		args = []any{sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID,
-			sub.UserID, sub.PlanName, sub.Status, sub.Metadata,
-			sub.DateStart, sub.DateEnd, sub.DateRenewal}
-	} else {
-		if sub.ID == "" {
-			sub.ID = uuid.NewString()
-		}
-		args = []any{sub.ID, sub.StripeCustomerID, sub.StripeSubscriptionID, sub.StripePriceID,
-			sub.UserID, sub.PlanName, sub.Status, sub.Metadata,
-			sub.DateStart, sub.DateEnd, sub.DateRenewal}
-	}
-
-	if r.q.hasReturning {
-		return scanSubscription(r.db.QueryRowContext(ctx, r.q.upsertSub, args...))
-	}
-
-	_, err := r.db.ExecContext(ctx, r.q.upsertSub, args...)
-	if err != nil {
-		return nil, err
-	}
-	return r.findSubscriptionByStripeID(ctx, sub.StripeSubscriptionID, sub.StripeCustomerID)
-}
-
-func (r *repository) findSubscriptionByUserID(ctx context.Context, userID string) (*Subscription, error) {
-	return scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByUser, userID))
-}
-
-func (r *repository) findSubscriptionByStripeID(ctx context.Context, stripeSubID, stripeCustomerID string) (*Subscription, error) {
-	return scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByStripe, stripeSubID, stripeCustomerID))
-}
-
-func (r *repository) deleteSubscription(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, r.q.deleteSub, id)
+func (r *repository) upsertPrice(ctx context.Context, p Price) error {
+	_, err := r.db.ExecContext(ctx, r.q.upsertPrice,
+		p.ID, p.ProductID, p.Currency, p.UnitAmount,
+		nullStr(p.RecurringInterval), p.RecurringCount,
+		p.Active, p.StripeCreatedAt,
+	)
 	return err
 }
 
-func (r *repository) checkActiveSubscription(ctx context.Context, userID string) (bool, error) {
-	var count int64
-	err := r.db.QueryRowContext(ctx, r.q.checkActiveSub, userID, time.Now().UTC()).Scan(&count)
-	return count > 0, err
+func (r *repository) listPricesForProduct(ctx context.Context, productID string) ([]Price, error) {
+	rows, err := r.db.QueryContext(ctx, r.q.listPricesByProduct, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var prices []Price
+	for rows.Next() {
+		var p Price
+		if err := rows.Scan(
+			&p.ID, &p.ProductID, &p.Currency, &p.UnitAmount, &p.RecurringInterval, &p.RecurringCount,
+			&p.Active, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		prices = append(prices, p)
+	}
+	return prices, rows.Err()
+}
+
+// --------------------------------------------------------------------------
+// Webhook idempotency helpers
+// --------------------------------------------------------------------------
+
+// markEventProcessing inserts the event ID. Returns true if it was already present.
+func (r *repository) markEventProcessing(ctx context.Context, eventID, eventType string) (alreadyProcessed bool, err error) {
+	res, err := r.db.ExecContext(ctx, r.q.markEventProcessing, eventID, eventType)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 0, nil
+}
+
+func (r *repository) markEventDone(ctx context.Context, eventID string, processingErr error) error {
+	errStr := ""
+	if processingErr != nil {
+		errStr = processingErr.Error()
+	}
+	if r.q.isMySQL {
+		_, err := r.db.ExecContext(ctx, r.q.markEventDone, errStr, eventID)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, r.q.markEventDone, eventID, errStr)
+	return err
+}
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+func nullStr(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }

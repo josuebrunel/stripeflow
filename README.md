@@ -1,15 +1,17 @@
 # StripeFlow
 
-StripeFlow is a pluggable Go library for integrating Stripe subscriptions into your application. It handles checkout sessions, billing portal, webhook processing, and subscription state — with support for PostgreSQL, MySQL, and SQLite.
+StripeFlow is a pluggable Go library for integrating Stripe subscriptions into any Go application. It handles checkout sessions, billing portal, webhook processing, subscription state, product/price catalogue syncing, and built-in usage tracking — with support for **PostgreSQL**, **MySQL**, and **SQLite**.
 
 ## Features
 
-- **Checkout & Portal** — pre-built HTTP handlers for Stripe Checkout and Billing Portal
-- **Webhook processing** — handles subscription lifecycle events (`invoice.paid`, `customer.subscription.updated/deleted`)
-- **Plan syncing** — syncs Stripe prices to a local database
-- **Subscription middleware** — protect routes by requiring an active subscription
+- **Programmatic Checkout & Portal** — `CreateCheckout()` / `CreatePortalSession()` return URLs; you control the redirect
+- **Webhook processing** — handles the full subscription lifecycle with **idempotency guarantees**
+- **Product & Price sync** — sync Stripe catalogue to a local database on startup or via cron
+- **Subscription middleware** — protect routes requiring an active or trialing subscription
+- **Built-in usage tracking** — per-user `usage_count` / `usage_limit` with atomic increment
+- **Typed error sentinels** — `ErrNoSubscription`, `ErrTrialExpired`, `ErrUsageLimitReached`, etc.
 - **Multi-dialect** — works with PostgreSQL, MySQL, and SQLite
-- **Zero framework dependency** — uses stdlib `net/http` and `log/slog`
+- **Zero framework dependency** — uses only `net/http`, `log/slog`, and `database/sql`
 
 ## Installation
 
@@ -21,200 +23,305 @@ go get stripeflow
 
 ### 1. Run Migrations
 
-StripeFlow uses embedded Goose migrations to create the required tables.
+StripeFlow uses embedded Goose migrations to create and version all required tables.
 
 ```go
 import (
     "database/sql"
-    "log"
-
     _ "github.com/lib/pq"
     "stripeflow/migrations"
 )
 
-func main() {
-    db, err := sql.Open("postgres", "postgres://user:pass@localhost:5432/dbname?sslmode=disable")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer db.Close()
+db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
 
-    if err := migrations.MigrateUp(db, "postgres"); err != nil {
-        log.Fatalf("migration failed: %v", err)
-    }
+if err := migrations.MigrateUp(db, "postgres"); err != nil {
+    log.Fatalf("migration failed: %v", err)
 }
 ```
 
-### 2. Implement UserResolver
+Supported dialect values: `"postgres"`, `"mysql"`, `"sqlite"`.
 
-StripeFlow needs a way to identify users in your application:
-
-```go
-import (
-    "context"
-    "stripeflow"
-)
-
-type MyUserResolver struct {
-    // your auth/session dependencies
-}
-
-func (r *MyUserResolver) GetUserID(ctx context.Context) (string, error) {
-    return "user-id-from-session", nil
-}
-
-func (r *MyUserResolver) GetUserEmail(ctx context.Context) (string, error) {
-    return "user@example.com", nil
-}
-
-func (r *MyUserResolver) FindUserIDByEmail(ctx context.Context, email string) (string, error) {
-    return "user-id", nil
-}
-```
-
-### 3. Initialize & Mount
+### 2. Initialise the Client
 
 ```go
 import (
-    "context"
-    "database/sql"
-    "log"
     "net/http"
-
-    _ "github.com/lib/pq"
     "stripeflow"
 )
 
-func main() {
-    db, _ := sql.Open("postgres", "...")
-    defer db.Close()
+sf, err := stripeflow.New(stripeflow.Config{
+    Dialect:         "postgres",               // "postgres" | "mysql" | "sqlite"
+    DB:              db,
+    StripeSecretKey: os.Getenv("STRIPE_SECRET_KEY"),
+    WebhookSecret:   os.Getenv("STRIPE_WEBHOOK_SECRET"),
+    TrialDays:       14,                       // global trial default (0 = no trial)
+    UsageLimitEnabled: true,                   // enforce usage_limit in middleware
 
-    sf, err := stripeflow.New(stripeflow.Config{
-        Dialect:         "postgres",  // "postgres", "mysql", "sqlite"
-        DB:              db,
-        StripeSecretKey: "sk_...",
-        WebhookSecret:   "whsec_...",
-        RedirectURL:     "https://example.com/account",
-    }, &MyUserResolver{})
-    if err != nil {
-        log.Fatal(err)
-    }
+    // Tell middleware how to identify the current user.
+    GetUserID: func(r *http.Request) (string, error) {
+        return sessionUserID(r), nil           // parse JWT, cookie, etc.
+    },
 
-    // Sync Stripe prices to local DB
-    sf.SyncPrices(context.Background())
-
-    mux := http.NewServeMux()
-
-    // Mount StripeFlow handlers:
-    //   POST /stripe/checkout
-    //   GET  /stripe/portal
-    //   POST /stripe/webhook
-    mux.Handle("/stripe/", http.StripPrefix("/stripe", sf.Handler()))
-
-    // Protect routes with subscription middleware
-    protected := sf.RequireSubscription(func(w http.ResponseWriter, r *http.Request) {
-        http.Error(w, "Payment Required", http.StatusPaymentRequired)
-    })
-    mux.Handle("/dashboard", protected(http.HandlerFunc(dashboardHandler)))
-
-    log.Fatal(http.ListenAndServe(":8080", mux))
-}
-
-func dashboardHandler(w http.ResponseWriter, r *http.Request) {
-    w.Write([]byte("Welcome, subscriber!"))
-}
-```
-
-### 4. Usage-Based Restrictions
-
-If your Stripe products have usage limits in their metadata (e.g., `"max_api_calls": "1000"`), use `RequireUsage` or `CheckUsage` with a custom check function:
-
-```go
-import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "strconv"
-    "net/http"
-
-    "stripeflow"
-)
-
-// Your custom usage check — you control the logic entirely.
-func checkAPICalls(ctx context.Context, sub *stripeflow.Subscription, plan *stripeflow.Plan) error {
-    // Extract limit from plan metadata (synced from Stripe)
-    limit := extractMetadataInt(plan.Metadata, "max_api_calls")
-    if limit == 0 {
-        return nil // no limit set, allow
-    }
-
-    // Count usage from YOUR data store
-    used := countUserAPICalls(ctx, sub.UserID) // your logic
-    if used >= limit {
-        return fmt.Errorf("API call limit reached (%d/%d)", used, limit)
-    }
-    return nil
-}
-
-func extractMetadataInt(raw *json.RawMessage, key string) int64 {
-    if raw == nil {
-        return 0
-    }
-    var m map[string]string
-    json.Unmarshal(*raw, &m)
-    v, _ := strconv.ParseInt(m[key], 10, 64)
-    return v
-}
-
-// As middleware:
-mux.Handle("/api/", sf.RequireUsage(checkAPICalls, func(w http.ResponseWriter, r *http.Request) {
-    http.Error(w, "Usage limit exceeded", http.StatusTooManyRequests)
-})(http.HandlerFunc(apiHandler)))
-
-// Or programmatically:
-err := sf.CheckUsage(ctx, userID, checkAPICalls)
+    // Optional: called after every successfully processed webhook event.
+    OnEvent: func(event *stripe.Event) {
+        log.Printf("stripe event: %s", event.Type)
+    },
+})
 if err != nil {
-    // usage limit exceeded
+    log.Fatal(err)
 }
 ```
 
-## API
+### 3. Sync Products & Register Webhook
 
-### StripeFlow Methods
+```go
+ctx := context.Background()
+
+// Sync Stripe product catalogue to the local database.
+result, err := sf.SyncProducts(ctx)
+// result.ProductsUpserted, result.PricesUpserted
+
+mux := http.NewServeMux()
+
+// Webhook endpoint (mount at the URL configured in your Stripe dashboard).
+mux.Handle("POST /stripe/webhook", sf.WebhookHandler())
+
+log.Fatal(http.ListenAndServe(":8080", mux))
+```
+
+---
+
+## Checkout & Billing Portal
+
+Both APIs are **programmatic** — they return a URL and you redirect the user.
+
+### Create a Checkout Session
+
+```go
+result, err := sf.CreateCheckout(ctx, stripeflow.CheckoutParams{
+    UserID:              currentUserID,
+    UserEmail:           currentUserEmail,    // optional, pre-fills Stripe form
+    PriceID:             "price_1ABC...",
+    SuccessURL:          "https://myapp.com/success",
+    CancelURL:           "https://myapp.com/pricing",
+    AllowPromotionCodes: true,
+    // TrialDays: stripeflow.Int64Ptr(7), // override global TrialDays for this checkout
+})
+if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+}
+http.Redirect(w, r, result.URL, http.StatusSeeOther)
+```
+
+### Open the Billing Portal
+
+```go
+url, err := sf.CreatePortalSession(ctx, stripeflow.PortalParams{
+    UserID:    currentUserID,
+    ReturnURL: "https://myapp.com/account",
+})
+if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+}
+http.Redirect(w, r, url, http.StatusSeeOther)
+```
+
+---
+
+## Middleware
+
+Middleware injects the resolved `*Subscription` into the request context and is accessible via `SubscriptionFromContext`.
+
+### Protect Routes
+
+```go
+// Allow active subscribers AND users in a valid trial.
+mux.Handle("/app/", sf.RequireActiveOrTrial(appHandler))
+
+// Require a fully paid subscription (no trials).
+mux.Handle("/api/premium", sf.RequireActiveSubscription(premiumHandler))
+
+// Full control via MiddlewareOptions.
+mux.Handle("/api/", sf.RequireSubscription(apiHandler, stripeflow.MiddlewareOptions{
+    AllowTrialing:   false,
+    CheckUsageLimit: true,  // deny when usage_count >= usage_limit
+    OnDenied: func(w http.ResponseWriter, r *http.Request, reason error) {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusPaymentRequired)
+        json.NewEncoder(w).Encode(map[string]string{
+            "error":       "upgrade_required",
+            "upgrade_url": "https://myapp.com/pricing",
+        })
+    },
+}))
+```
+
+### Read Subscription in Handlers
+
+```go
+func appHandler(w http.ResponseWriter, r *http.Request) {
+    sub, ok := stripeflow.SubscriptionFromContext(r.Context())
+    if ok {
+        fmt.Fprintf(w, "plan: %s, usage: %d/%v", sub.StripePriceID, sub.UsageCount, sub.UsageLimit)
+    }
+}
+```
+
+### Default Denial Responses
+
+When `OnDenied` is not set, the middleware returns structured JSON with HTTP status codes mapped to sentinel errors:
+
+| Error | HTTP Status | JSON `error` key |
+|---|---|---|
+| `ErrNoSubscription` | `402` | `no_subscription` |
+| `ErrTrialExpired` | `402` | `trial_expired` |
+| `ErrSubscriptionInactive` | `402` | `subscription_inactive` |
+| `ErrUsageLimitReached` | `429` | `usage_limit_reached` |
+
+---
+
+## Usage Tracking
+
+stripeflow stores a `usage_count` and optional `usage_limit` directly on the subscription row.
+
+```go
+// Increment usage after a successful operation.
+newCount, err := sf.IncrementUsage(ctx, userID, 1)
+
+// Set a cap (nil = unlimited).
+err = sf.SetUsageLimit(ctx, userID, stripeflow.Int64Ptr(1000))
+
+// Reset at the start of a billing period (e.g. via OnEvent hook).
+err = sf.ResetUsage(ctx, userID)
+```
+
+---
+
+## Products & Prices
+
+### Sync from Stripe
+
+```go
+result, err := sf.SyncProducts(ctx)
+// Fetches all products + prices from Stripe and upserts them locally.
+```
+
+### List Locally Cached Catalogue
+
+```go
+products, err := sf.ListProducts(ctx, true /* activeOnly */)
+prices, err   := sf.ListPrices(ctx, "prod_ABC123")
+```
+
+### Create Programmatically
+
+```go
+product, err := sf.CreateProduct(ctx, stripeflow.CreateProductParams{
+    Name:        "Pro Plan",
+    Description: "All features, unlimited usage",
+})
+
+price, err := sf.CreatePrice(ctx, stripeflow.CreatePriceParams{
+    StripeProductID: product.ID,
+    UnitAmount:      1999, // $19.99
+    Currency:        "usd",
+    Recurring: &stripeflow.RecurringParams{
+        Interval:      stripeflow.IntervalMonth,
+        IntervalCount: 1,
+    },
+})
+```
+
+---
+
+## Webhooks
+
+Mount `WebhookHandler()` and configure the same URL in your Stripe dashboard.
+
+```go
+mux.Handle("POST /stripe/webhook", sf.WebhookHandler())
+```
+
+**Handled events:**
+
+| Event | Action |
+|---|---|
+| `checkout.session.completed` | Creates/updates subscription |
+| `customer.subscription.created/updated` | Updates subscription status & period |
+| `customer.subscription.deleted` | Marks subscription as `canceled` |
+| `customer.subscription.trial_will_end` | Informational — fire via `OnEvent` for emails |
+| `invoice.payment_succeeded` | Marks subscription `active`, updates period |
+| `invoice.payment_failed` | Marks subscription `past_due` |
+| `product.created/updated/deleted` | Upserts local product |
+| `price.created/updated/deleted` | Upserts local price |
+
+All events are idempotent — duplicate deliveries are safely ignored via the `stripeflow_webhook_events` table.
+
+Use `OnEvent` for side-effects like cache invalidation or sending emails:
+
+```go
+stripeflow.Config{
+    OnEvent: func(event *stripe.Event) {
+        if event.Type == "customer.subscription.trial_will_end" {
+            sendTrialEndingEmail(event)
+        }
+    },
+}
+```
+
+---
+
+## API Reference
+
+### Client Methods
 
 | Method | Description |
-|--------|-------------|
-| `Handler() http.Handler` | Returns an HTTP handler with checkout, portal, and webhook endpoints |
-| `RequireSubscription(fallback) func(http.Handler) http.Handler` | Middleware that requires an active subscription |
-| `RequireUsage(check, fallback) func(http.Handler) http.Handler` | Middleware that checks usage limits via a custom function |
-| `CheckUsage(ctx, userID, check) error` | Programmatic usage check (non-middleware) |
-| `SyncPrices(ctx) error` | Syncs all Stripe prices to the local database |
-| `GetPlans(ctx) ([]Plan, error)` | Returns all active plans |
-| `FindPlan(ctx, priceID) (*Plan, error)` | Finds a plan by Stripe price ID |
-| `GetSubscription(ctx, userID) (*Subscription, error)` | Returns the user's latest subscription |
-| `HasActiveSubscription(ctx, userID) (bool, error)` | Checks if a user has an active subscription |
+|---|---|
+| `CreateCheckout(ctx, CheckoutParams) (*CheckoutResult, error)` | Create a Stripe Checkout session |
+| `CreatePortalSession(ctx, PortalParams) (string, error)` | Create a Stripe Billing Portal session |
+| `WebhookHandler() http.Handler` | Verified webhook event handler |
+| `Handler() http.Handler` | Thin convenience mux (checkout + portal + webhook) |
+| `RequireSubscription(next, ...opts) http.Handler` | Subscription-required middleware |
+| `RequireActiveOrTrial(next) http.Handler` | Allows active + trialing users |
+| `RequireActiveSubscription(next) http.Handler` | Paid subscription only (no trials) |
+| `GetSubscription(ctx, userID) (*Subscription, error)` | Fetch subscription state |
+| `IncrementUsage(ctx, userID, delta) (int64, error)` | Atomically increment usage counter |
+| `SetUsageLimit(ctx, userID, *int64) error` | Set or remove usage cap |
+| `ResetUsage(ctx, userID) error` | Zero usage counter |
+| `SyncProducts(ctx) (*SyncResult, error)` | Pull Stripe catalogue → local DB |
+| `ListProducts(ctx, activeOnly) ([]Product, error)` | List local products |
+| `ListPrices(ctx, productID) ([]Price, error)` | List local prices for a product |
+| `CreateProduct(ctx, CreateProductParams) (*Product, error)` | Create product in Stripe + local |
+| `UpdateProduct(ctx, UpdateProductParams) (*Product, error)` | Update product in Stripe + local |
+| `CreatePrice(ctx, CreatePriceParams) (*Price, error)` | Create price in Stripe + local |
+| `ArchivePrice(ctx, priceID) error` | Archive price in Stripe |
 
-### HTTP Endpoints
+### Helpers
 
-| Path | Method | Description |
-|------|--------|-------------|
-| `/checkout` | `POST` | Creates a Stripe Checkout session. Requires `plan_id` in form data. |
-| `/portal` | `GET` | Creates a Stripe Billing Portal session for the current user. |
-| `/webhook` | `POST` | Receives and processes Stripe webhook events. |
+```go
+stripeflow.SubscriptionFromContext(ctx) (*Subscription, bool)
+stripeflow.Int64Ptr(v int64) *int64
+```
 
-### Environment
+---
 
-Set these before initializing, or pass them directly via `Config`:
+## Database Tables
 
-| Variable | Description |
-|----------|-------------|
-| `STRIPE_SECRET_KEY` | Your Stripe secret API key |
-| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
+| Table | Purpose |
+|---|---|
+| `stripeflow_products` | Stripe products synced locally |
+| `stripeflow_prices` | Stripe prices synced locally |
+| `stripeflow_subscriptions` | One row per user — subscription state + usage |
+| `stripeflow_webhook_events` | Idempotency log of processed Stripe events |
+
+---
 
 ## Running Tests
 
 ```sh
-# Unit tests (SQLite in-memory)
+# Unit tests (SQLite in-memory, no external services)
 go test -v ./...
 
 # Integration tests (requires Docker)

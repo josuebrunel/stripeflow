@@ -1,6 +1,7 @@
 package stripeflow
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type Subscription struct {
 	CanceledAt           *time.Time
 	UsageCount           int64
 	UsageLimit           *int64
+	Metadata             *json.RawMessage
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -53,6 +55,8 @@ type Product struct {
 	Name            string
 	Description     string
 	Active          bool
+	Metadata        *json.RawMessage
+	Features        *json.RawMessage
 	StripeCreatedAt *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -67,6 +71,7 @@ type Price struct {
 	RecurringInterval string
 	RecurringCount    *int
 	Active            bool
+	Metadata          *json.RawMessage
 	StripeCreatedAt   *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time

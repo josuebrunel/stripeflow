@@ -3,6 +3,7 @@ package stripeflow
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -162,11 +163,17 @@ func testProductOperations(t *testing.T, sf *Client) {
 
 	// Upsert a product.
 	now := time.Now().UTC()
+
+	m := json.RawMessage(`{"tier":"pro"}`)
+	f := json.RawMessage(`[{"name":"Cool feature"}]`)
+
 	if err := sf.repo.upsertProduct(ctx, Product{
 		ID:              "prod_test",
 		Name:            "Pro Plan",
 		Description:     "The pro plan",
 		Active:          true,
+		Metadata:        &m,
+		Features:        &f,
 		StripeCreatedAt: &now,
 	}); err != nil {
 		t.Fatalf("upsertProduct: %v", err)
@@ -179,10 +186,17 @@ func testProductOperations(t *testing.T, sf *Client) {
 	if len(products) != 1 || products[0].ID != "prod_test" {
 		t.Fatalf("expected 1 product 'prod_test', got %+v", products)
 	}
+	if string(*products[0].Metadata) != string(m) {
+		t.Fatalf("expected metadata %s, got %s", m, *products[0].Metadata)
+	}
+	if string(*products[0].Features) != string(f) {
+		t.Fatalf("expected features %s, got %s", f, *products[0].Features)
+	}
 
 	// Upsert a price.
 	ua := int64(1999)
 	count := 1
+	pm := json.RawMessage(`{"type":"recurring"}`)
 	if err := sf.repo.upsertPrice(ctx, Price{
 		ID:                "price_test",
 		ProductID:         "prod_test",
@@ -191,6 +205,7 @@ func testProductOperations(t *testing.T, sf *Client) {
 		RecurringInterval: "month",
 		RecurringCount:    &count,
 		Active:            true,
+		Metadata:          &pm,
 		StripeCreatedAt:   &now,
 	}); err != nil {
 		t.Fatalf("upsertPrice: %v", err)
@@ -202,6 +217,9 @@ func testProductOperations(t *testing.T, sf *Client) {
 	}
 	if len(prices) != 1 || prices[0].ID != "price_test" {
 		t.Fatalf("expected 1 price 'price_test', got %+v", prices)
+	}
+	if string(*prices[0].Metadata) != string(pm) {
+		t.Fatalf("expected price metadata %s, got %s", pm, *prices[0].Metadata)
 	}
 }
 

@@ -6,6 +6,7 @@ CREATE TABLE stripeflow_products (
     description       TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
     metadata          TEXT    NOT NULL DEFAULT '{}',
+    features          TEXT    NOT NULL DEFAULT '[]',
     stripe_created_at DATETIME,
     created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

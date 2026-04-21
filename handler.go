@@ -287,6 +287,11 @@ func (c *Client) onSubscriptionUpdated(ctx context.Context, sub *stripe.Subscrip
 		Status:               SubscriptionStatus(sub.Status),
 	}
 
+	if len(sub.Metadata) > 0 {
+		b, _ := json.Marshal(sub.Metadata)
+		p.Metadata = b
+	}
+
 	if sub.Items != nil && len(sub.Items.Data) > 0 {
 		item := sub.Items.Data[0]
 		if item.Price != nil {
@@ -410,13 +415,24 @@ func (c *Client) onProductUpserted(ctx context.Context, prod *stripe.Product) er
 		t := time.Unix(prod.Created, 0)
 		createdAt = &t
 	}
-	return c.repo.upsertProduct(ctx, Product{
+	local := Product{
 		ID:              prod.ID,
 		Name:            prod.Name,
 		Description:     prod.Description,
 		Active:          prod.Active,
 		StripeCreatedAt: createdAt,
-	})
+	}
+	if len(prod.Metadata) > 0 {
+		b, _ := json.Marshal(prod.Metadata)
+		m := json.RawMessage(b)
+		local.Metadata = &m
+	}
+	if len(prod.MarketingFeatures) > 0 {
+		b, _ := json.Marshal(prod.MarketingFeatures)
+		f := json.RawMessage(b)
+		local.Features = &f
+	}
+	return c.repo.upsertProduct(ctx, local)
 }
 
 func (c *Client) onPriceUpserted(ctx context.Context, p *stripe.Price) error {
@@ -435,6 +451,11 @@ func (c *Client) onPriceUpserted(ctx context.Context, p *stripe.Price) error {
 		Currency:        string(p.Currency),
 		Active:          p.Active,
 		StripeCreatedAt: createdAt,
+	}
+	if len(p.Metadata) > 0 {
+		b, _ := json.Marshal(p.Metadata)
+		m := json.RawMessage(b)
+		lp.Metadata = &m
 	}
 	if p.UnitAmount != 0 {
 		ua := p.UnitAmount

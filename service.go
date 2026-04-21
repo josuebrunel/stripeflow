@@ -2,6 +2,7 @@ package stripeflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -51,6 +52,16 @@ func (c *Client) CreateProduct(ctx context.Context, p CreateProductParams) (*Pro
 		Name:        prod.Name,
 		Description: prod.Description,
 		Active:      prod.Active,
+	}
+	if len(prod.Metadata) > 0 {
+		b, _ := json.Marshal(prod.Metadata)
+		m := json.RawMessage(b)
+		local.Metadata = &m
+	}
+	if len(prod.MarketingFeatures) > 0 {
+		b, _ := json.Marshal(prod.MarketingFeatures)
+		f := json.RawMessage(b)
+		local.Features = &f
 	}
 	if prod.Created != 0 {
 		t := time.Unix(prod.Created, 0)
@@ -103,6 +114,16 @@ func (c *Client) UpdateProduct(ctx context.Context, p UpdateProductParams) (*Pro
 		Name:        prod.Name,
 		Description: prod.Description,
 		Active:      prod.Active,
+	}
+	if len(prod.Metadata) > 0 {
+		b, _ := json.Marshal(prod.Metadata)
+		m := json.RawMessage(b)
+		local.Metadata = &m
+	}
+	if len(prod.MarketingFeatures) > 0 {
+		b, _ := json.Marshal(prod.MarketingFeatures)
+		f := json.RawMessage(b)
+		local.Features = &f
 	}
 	if prod.Created != 0 {
 		t := time.Unix(prod.Created, 0)
@@ -186,6 +207,11 @@ func (c *Client) CreatePrice(ctx context.Context, p CreatePriceParams) (*Price, 
 		Currency:  string(price.Currency),
 		Active:    price.Active,
 	}
+	if len(price.Metadata) > 0 {
+		b, _ := json.Marshal(price.Metadata)
+		m := json.RawMessage(b)
+		local.Metadata = &m
+	}
 	if price.UnitAmount != 0 {
 		ua := price.UnitAmount
 		local.UnitAmount = &ua
@@ -239,13 +265,24 @@ func (c *Client) SyncProducts(ctx context.Context) (*SyncResult, error) {
 			t := time.Unix(prod.Created, 0)
 			createdAt = &t
 		}
-		if err := c.repo.upsertProduct(ctx, Product{
+		local := Product{
 			ID:              prod.ID,
 			Name:            prod.Name,
 			Description:     prod.Description,
 			Active:          prod.Active,
 			StripeCreatedAt: createdAt,
-		}); err != nil {
+		}
+		if len(prod.Metadata) > 0 {
+			b, _ := json.Marshal(prod.Metadata)
+			m := json.RawMessage(b)
+			local.Metadata = &m
+		}
+		if len(prod.MarketingFeatures) > 0 {
+			b, _ := json.Marshal(prod.MarketingFeatures)
+			f := json.RawMessage(b)
+			local.Features = &f
+		}
+		if err := c.repo.upsertProduct(ctx, local); err != nil {
 			return result, fmt.Errorf("stripeflow: sync product %s: %w", prod.ID, err)
 		}
 		result.ProductsUpserted++
@@ -273,6 +310,11 @@ func (c *Client) SyncProducts(ctx context.Context) (*SyncResult, error) {
 			Currency:        string(price.Currency),
 			Active:          price.Active,
 			StripeCreatedAt: createdAt,
+		}
+		if len(price.Metadata) > 0 {
+			b, _ := json.Marshal(price.Metadata)
+			m := json.RawMessage(b)
+			lp.Metadata = &m
 		}
 		if price.UnitAmount != 0 {
 			ua := price.UnitAmount

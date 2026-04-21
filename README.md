@@ -409,3 +409,59 @@ go test -v ./...
 # Integration tests (requires Docker)
 go test -v -run TestPostgresAndMySQLIntegration ./...
 ```
+
+---
+
+## CLI Tool
+
+StripeFlow comes with a built-in CLI tool to help you manage your database migrations, products, and syncing.
+
+### Installation
+
+```sh
+go run github.com/josuebrunel/stripeflow/cmd/stripeflow@latest
+```
+
+### Configuration
+
+The CLI uses the following environment variables. Note that the variables are prefixed with `STRIPEFLOW_`.
+
+```sh
+export STRIPEFLOW_DATABASE_URL="postgres://user:pass@localhost:5432/dbname?sslmode=disable"
+export STRIPEFLOW_STRIPE_SECRET_KEY="sk_test_..."
+export STRIPEFLOW_WEBHOOK_SECRET="whsec_..."
+```
+
+*(Note: SQLite (`sqlite://...`) and MySQL (`mysql://...`) URLs are also supported).*
+
+### Usage
+
+**Run Database Migrations:**
+
+```sh
+stripeflow -migrate=up
+stripeflow -migrate=down
+```
+
+**Sync Products from Stripe:**
+
+Fetches all products and their prices from your Stripe account and upserts them locally.
+
+```sh
+stripeflow -sync
+```
+
+**Provision a Full Product from JSON:**
+
+Creates a product and all its prices in Stripe, and syncs each resource to your local database.
+
+```sh
+stripeflow -provision=product.json
+```
+
+**Delete a Product or All Products:**
+
+```sh
+stripeflow -delete="prod_12345" # Deletes a single product and archives its prices
+stripeflow -delete="all"        # Deletes all products and prices locally and from Stripe
+```

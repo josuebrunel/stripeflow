@@ -45,7 +45,7 @@ func setupTestDB(t *testing.T, dialect, dsn string) *sql.DB {
 	return db
 }
 
-func newTestClient(t *testing.T, db *sql.DB, dialect string) *Client {
+func newTestClient(t *testing.T, db *sql.DB, dialect Dialect) *Client {
 	t.Helper()
 	sf, err := New(Config{
 		Dialect:         dialect,
@@ -310,7 +310,7 @@ func TestSQLite(t *testing.T) {
 	db := setupTestDB(t, "sqlite", ":memory:")
 	defer db.Close()
 
-	sf := newTestClient(t, db, "sqlite")
+	sf := newTestClient(t, db, SQLite)
 
 	t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 	t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
@@ -338,7 +338,7 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 	t.Run("Postgres", func(t *testing.T) {
 		db := setupTestDB(t, "postgres", "postgres://testuser:testpassword@localhost:5432/testdb?sslmode=disable")
 		defer db.Close()
-		sf := newTestClient(t, db, "postgres")
+		sf := newTestClient(t, db, Postgres)
 		t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
@@ -348,7 +348,7 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 	t.Run("MySQL", func(t *testing.T) {
 		db := setupTestDB(t, "mysql", "testuser:testpassword@tcp(127.0.0.1:3306)/testdb?parseTime=true")
 		defer db.Close()
-		sf := newTestClient(t, db, "mysql")
+		sf := newTestClient(t, db, MySQL)
 		t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })

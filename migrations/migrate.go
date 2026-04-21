@@ -1,9 +1,11 @@
 package migrations
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
 
 	"github.com/pressly/goose/v3"
 )
@@ -11,13 +13,27 @@ import (
 //go:embed postgres/*.sql sqlite/*.sql mysql/*.sql
 var embedMigrations embed.FS
 
+func newProvider(db *sql.DB, dialect string) (*goose.Provider, error) {
+	gooseDialect, err := parseDialect(dialect)
+	if err != nil {
+		return nil, err
+	}
+	fsys, err := fs.Sub(embedMigrations, migrationDir(dialect))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get migration subdirectory: %w", err)
+	}
+	return goose.NewProvider(gooseDialect, db, fsys,
+		goose.WithTableName("sf_goose_db_version"),
+	)
+}
+
 // MigrateUp applies all pending migrations for the given dialect.
 func MigrateUp(db *sql.DB, dialect string) error {
-	goose.SetBaseFS(embedMigrations)
-	if err := goose.SetDialect(gooseDialect(dialect)); err != nil {
-		return fmt.Errorf("failed to set dialect: %w", err)
+	provider, err := newProvider(db, dialect)
+	if err != nil {
+		return fmt.Errorf("failed to create migration provider: %w", err)
 	}
-	if err := goose.Up(db, migrationDir(dialect)); err != nil {
+	if _, err := provider.Up(context.Background()); err != nil {
 		return fmt.Errorf("failed to run migrations up: %w", err)
 	}
 	return nil
@@ -25,21 +41,27 @@ func MigrateUp(db *sql.DB, dialect string) error {
 
 // MigrateDown rolls back all migrations for the given dialect.
 func MigrateDown(db *sql.DB, dialect string) error {
-	goose.SetBaseFS(embedMigrations)
-	if err := goose.SetDialect(gooseDialect(dialect)); err != nil {
-		return fmt.Errorf("failed to set dialect: %w", err)
+	provider, err := newProvider(db, dialect)
+	if err != nil {
+		return fmt.Errorf("failed to create migration provider: %w", err)
 	}
-	if err := goose.DownTo(db, migrationDir(dialect), 0); err != nil {
+	if _, err := provider.DownTo(context.Background(), 0); err != nil {
 		return fmt.Errorf("failed to run migrations down: %w", err)
 	}
 	return nil
 }
 
-func gooseDialect(dialect string) string {
-	if dialect == "sqlite" {
-		return "sqlite3"
+func parseDialect(dialect string) (goose.Dialect, error) {
+	switch dialect {
+	case "postgres":
+		return goose.DialectPostgres, nil
+	case "mysql":
+		return goose.DialectMySQL, nil
+	case "sqlite", "sqlite3":
+		return goose.DialectSQLite3, nil
+	default:
+		return "", fmt.Errorf("unsupported dialect: %s", dialect)
 	}
-	return dialect
 }
 
 func migrationDir(dialect string) string {

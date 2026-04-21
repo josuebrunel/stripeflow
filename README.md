@@ -1,10 +1,10 @@
 # StripeFlow
 
-StripeFlow is a pluggable Go library for integrating Stripe subscriptions into any Go application. It handles checkout sessions, billing portal, webhook processing, subscription state, product/price catalogue syncing, and built-in usage tracking — with support for **PostgreSQL**, **MySQL**, and **SQLite**.
+StripeFlow is a pluggable Go library that focuses exclusively on integrating the Stripe Customer Portal into any Go application. It handles billing portal generation, webhook processing, subscription state, product/price catalogue syncing, and built-in usage tracking — with support for **PostgreSQL**, **MySQL**, and **SQLite**.
 
 ## Features
 
-- **Programmatic Checkout & Portal** — `CreateCheckout()` / `CreatePortalSession()` return URLs; you control the redirect
+- **Programmatic Portal** — `CreatePortalSession()` returns a URL; you control the redirect
 - **Webhook processing** — handles the full subscription lifecycle with **idempotency guarantees**
 - **Product & Price sync** — sync Stripe catalogue to a local database on startup or via cron
 - **Subscription middleware** — protect routes requiring an active or trialing subscription
@@ -91,28 +91,9 @@ log.Fatal(http.ListenAndServe(":8080", mux))
 
 ---
 
-## Checkout & Billing Portal
+## Billing Portal
 
 Both APIs are **programmatic** — they return a URL and you redirect the user.
-
-### Create a Checkout Session
-
-```go
-result, err := sf.CreateCheckout(ctx, stripeflow.CheckoutParams{
-    UserID:              currentUserID,
-    UserEmail:           currentUserEmail,    // optional, pre-fills Stripe form
-    PriceID:             "price_1ABC...",
-    SuccessURL:          "https://myapp.com/success",
-    CancelURL:           "https://myapp.com/pricing",
-    AllowPromotionCodes: true,
-    // TrialDays: stripeflow.Int64Ptr(7), // override global TrialDays for this checkout
-})
-if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
-    return
-}
-http.Redirect(w, r, result.URL, http.StatusSeeOther)
-```
 
 ### Open the Billing Portal
 
@@ -343,7 +324,6 @@ mux.Handle("POST /stripe/webhook", sf.WebhookHandler())
 
 | Event | Action |
 |---|---|
-| `checkout.session.completed` | Creates/updates subscription |
 | `customer.subscription.created/updated` | Updates subscription status & period |
 | `customer.subscription.deleted` | Marks subscription as `canceled` |
 | `customer.subscription.trial_will_end` | Informational — fire via `OnEvent` for emails |
@@ -374,10 +354,9 @@ stripeflow.Config{
 
 | Method | Description |
 |---|---|
-| `CreateCheckout(ctx, CheckoutParams) (*CheckoutResult, error)` | Create a Stripe Checkout session |
 | `CreatePortalSession(ctx, PortalParams) (string, error)` | Create a Stripe Billing Portal session |
 | `WebhookHandler() http.Handler` | Verified webhook event handler |
-| `Handler() http.Handler` | Thin convenience mux (checkout + portal + webhook) |
+| `Handler() http.Handler` | Thin convenience mux (portal + webhook) |
 | `RequireSubscription(next, ...opts) http.Handler` | Subscription-required middleware |
 | `RequireActiveOrTrial(next) http.Handler` | Allows active + trialing users |
 | `RequireActiveSubscription(next) http.Handler` | Paid subscription only (no trials) |

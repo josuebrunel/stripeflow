@@ -1,6 +1,6 @@
 // Package stripeflow provides a pluggable Go library for integrating Stripe
-// subscriptions into your application. It handles checkout sessions, billing
-// portal access, webhook processing, subscription state management, and product
+// subscriptions into your application. It focuses on billing portal access,
+// webhook processing, subscription state management, and product
 // catalogue syncing — with support for PostgreSQL, MySQL, and SQLite.
 //
 // Quick start:

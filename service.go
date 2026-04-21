@@ -335,3 +335,52 @@ func (c *Client) GetSubscriptionByStripeSubID(ctx context.Context, subID string)
 func (c *Client) GetProductByID(ctx context.Context, id string) (*Product, error) {
 	return c.repo.getProductByID(ctx, id)
 }
+
+// DeleteProduct deletes a product and all of its associated prices from the local database.
+// In Stripe, prices are archived, and the product itself is archived (made inactive) because
+// Stripe does not allow deleting products that have ever had prices.
+func (c *Client) DeleteProduct(ctx context.Context, productID string) error {
+	// First fetch all prices to archive them
+	prices, err := c.repo.listPricesForProduct(ctx, productID)
+	if err != nil {
+		return fmt.Errorf("stripeflow: list prices for product: %w", err)
+	}
+
+	for _, p := range prices {
+		_ = c.ArchivePrice(ctx, p.ID) // Best effort to archive price in Stripe
+	}
+
+	// Archive product in Stripe (since it cannot be deleted if it has prices)
+	_, _ = stripeproduct.Update(productID, &stripe.ProductParams{
+		Active: stripe.Bool(false),
+	})
+
+	// Delete locally
+	if err := c.repo.deleteProduct(ctx, productID); err != nil {
+		return fmt.Errorf("stripeflow: local delete product: %w", err)
+	}
+
+	slog.Info("stripeflow: product and prices deleted locally, archived in Stripe", "product_id", productID)
+	return nil
+}
+
+// DeleteAllProducts deletes all products and prices from the local database
+// and attempts to archive them in Stripe.
+func (c *Client) DeleteAllProducts(ctx context.Context) error {
+	products, err := c.repo.listProducts(ctx, false)
+	if err != nil {
+		return fmt.Errorf("stripeflow: list all products: %w", err)
+	}
+
+	for _, prod := range products {
+		_ = c.DeleteProduct(ctx, prod.ID) // Best effort to archive in Stripe and delete locally
+	}
+
+	// Failsafe clean up any remaining local records
+	if err := c.repo.deleteAllProducts(ctx); err != nil {
+		return fmt.Errorf("stripeflow: local delete all products: %w", err)
+	}
+
+	slog.Info("stripeflow: all products and prices deleted locally")
+	return nil
+}

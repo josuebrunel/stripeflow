@@ -375,6 +375,8 @@ stripeflow.Config{
 | `UpdateProduct(ctx, UpdateProductParams) (*Product, error)` | Update product in Stripe + local |
 | `CreatePrice(ctx, CreatePriceParams) (*Price, error)` | Create price in Stripe + local |
 | `ArchivePrice(ctx, priceID) error` | Archive price in Stripe |
+| `DeleteProduct(ctx, productID) error` | Delete a product and archive its prices in Stripe, and remove locally |
+| `DeleteAllProducts(ctx) error` | Delete all products and prices, removing them locally and from Stripe |
 | `ProvisionProduct(ctx, ProvisionParams) (*ProvisionResult, error)` | Create product + all prices in one call |
 | `ProvisionProductFromJSON(ctx, []byte) (*ProvisionResult, error)` | Same as above, from raw JSON input |
 

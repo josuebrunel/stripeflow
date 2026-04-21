@@ -29,6 +29,10 @@ type queries struct {
 	upsertProduct string
 	listProducts  string
 	getProductByID string
+	deleteProduct  string
+	deleteAllProducts string
+	deletePricesForProduct string
+	deleteAllPrices string
 
 	// Prices
 	upsertPrice         string
@@ -139,6 +143,10 @@ var pgQueries = queries{
 		    stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at        = NOW()`,
 
+	deleteProduct:          `DELETE FROM stripeflow_products WHERE id = $1`,
+	deleteAllProducts:      `DELETE FROM stripeflow_products`,
+	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = $1`,
+	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = $1`,
@@ -251,6 +259,10 @@ var myQueries = queries{
 		    name = VALUES(name), description = VALUES(description),
 		    active = VALUES(active), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
 
+	deleteProduct:          `DELETE FROM stripeflow_products WHERE id = ?`,
+	deleteAllProducts:      `DELETE FROM stripeflow_products`,
+	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = ?`,
+	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = ?`,
@@ -356,6 +368,10 @@ var slQueries = queries{
 		    active = EXCLUDED.active, stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at = CURRENT_TIMESTAMP`,
 
+	deleteProduct:          `DELETE FROM stripeflow_products WHERE id = ?`,
+	deleteAllProducts:      `DELETE FROM stripeflow_products`,
+	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = ?`,
+	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = ?`,
@@ -641,4 +657,42 @@ func (r *repository) getProductByID(ctx context.Context, id string) (*Product, e
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (r *repository) deleteProduct(ctx context.Context, id string) error {
+    tx, err := r.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
+    // Delete prices first
+    if _, err := tx.ExecContext(ctx, r.q.deletePricesForProduct, id); err != nil {
+        return err
+    }
+    // Delete product
+    if _, err := tx.ExecContext(ctx, r.q.deleteProduct, id); err != nil {
+        return err
+    }
+
+    return tx.Commit()
+}
+
+func (r *repository) deleteAllProducts(ctx context.Context) error {
+    tx, err := r.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
+    // Delete all prices first
+    if _, err := tx.ExecContext(ctx, r.q.deleteAllPrices); err != nil {
+        return err
+    }
+    // Delete all products
+    if _, err := tx.ExecContext(ctx, r.q.deleteAllProducts); err != nil {
+        return err
+    }
+
+    return tx.Commit()
 }

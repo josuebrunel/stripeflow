@@ -428,3 +428,52 @@ func testHelperMethods(sf *Client) func(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteOperations(t *testing.T) {
+	t.Run("DeleteProducts", func(t *testing.T) {
+		ctx := context.Background()
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil { t.Fatal(err) }
+		defer db.Close()
+		repo, err := newRepository(db, string(SQLite))
+		if err != nil { t.Fatal(err) }
+		client := &Client{repo: repo}
+		// Create the schema manually for tests
+		_, err = db.Exec(`CREATE TABLE stripeflow_products (id TEXT PRIMARY KEY, name TEXT, description TEXT, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
+		if err != nil { t.Fatal(err) }
+		_, err = db.Exec(`CREATE TABLE stripeflow_prices (id TEXT PRIMARY KEY, product_id TEXT, currency TEXT, unit_amount INTEGER, recurring_interval TEXT, recurring_count INTEGER, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
+		if err != nil { t.Fatal(err) }
+
+		// Insert dummy data
+		_, err = db.Exec("INSERT INTO stripeflow_products (id, name, active) VALUES (?, ?, ?)", "prod_1", "Product 1", 1)
+		if err != nil { t.Fatal(err) }
+		_, err = db.Exec("INSERT INTO stripeflow_prices (id, product_id, currency, active) VALUES (?, ?, ?, ?)", "price_1", "prod_1", "usd", 1)
+		if err != nil { t.Fatal(err) }
+
+		err = client.repo.deleteProduct(ctx, "prod_1")
+		if err != nil { t.Fatal(err) }
+
+		var count int
+		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_products").Scan(&count)
+		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_prices").Scan(&count)
+		if err != nil { t.Fatal(err) }
+		if count != 0 { t.Fatalf("expected 0 prices, got %d", count) }
+		if err != nil { t.Fatal(err) }
+		if count != 0 { t.Fatalf("expected 0 products, got %d", count) }
+
+		// Now Test DeleteAllProducts
+		_, err = db.Exec("INSERT INTO stripeflow_products (id, name, active) VALUES (?, ?, ?)", "prod_2", "Product 2", 1)
+		if err != nil { t.Fatal(err) }
+		_, err = db.Exec("INSERT INTO stripeflow_prices (id, product_id, currency, active) VALUES (?, ?, ?, ?)", "price_2", "prod_2", "usd", 1)
+		if err != nil { t.Fatal(err) }
+
+		err = client.repo.deleteAllProducts(ctx)
+		if err != nil { t.Fatal(err) }
+		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_products").Scan(&count)
+		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_prices").Scan(&count)
+		if err != nil { t.Fatal(err) }
+		if count != 0 { t.Fatalf("expected 0 prices, got %d", count) }
+		if err != nil { t.Fatal(err) }
+		if count != 0 { t.Fatalf("expected 0 products, got %d", count) }
+	})
+}

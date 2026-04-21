@@ -9,6 +9,7 @@ CREATE TABLE stripeflow_products (
     description       TEXT,
     active            BOOLEAN     NOT NULL DEFAULT TRUE,
     metadata          JSONB       NOT NULL DEFAULT '{}',
+    features          JSONB       NOT NULL DEFAULT '[]',
     stripe_created_at TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()

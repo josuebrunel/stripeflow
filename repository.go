@@ -3,6 +3,7 @@ package stripeflow
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -70,8 +71,8 @@ var pgQueries = queries{
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
 		    (user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
-		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'),NOW())
 		ON CONFLICT (user_id) DO UPDATE SET
 		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
 		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
@@ -82,6 +83,7 @@ var pgQueries = queries{
 		    current_period_start    = EXCLUDED.current_period_start,
 		    current_period_end      = EXCLUDED.current_period_end,
 		    canceled_at             = EXCLUDED.canceled_at,
+		    metadata                = EXCLUDED.metadata,
 		    updated_at              = NOW()`,
 
 	createEmptySub: `
@@ -94,7 +96,7 @@ var pgQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE id = $1`,
 
 	findSubByUser: `
@@ -102,7 +104,7 @@ var pgQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE user_id = $1`,
 
 	findSubByCustomer: `
@@ -110,7 +112,7 @@ var pgQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_customer_id = $1`,
 
 	findSubByStripeID: `
@@ -118,7 +120,7 @@ var pgQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_subscription_id = $1`,
 
 	incrementUsage: `
@@ -134,12 +136,14 @@ var pgQueries = queries{
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = $1`,
 
 	upsertProduct: `
-		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,NOW())
+		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
+		VALUES ($1,$2,$3,$4,COALESCE($5, '{}'),COALESCE($6, '[]'),$7,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    name              = EXCLUDED.name,
 		    description       = EXCLUDED.description,
 		    active            = EXCLUDED.active,
+		    metadata          = EXCLUDED.metadata,
+		    features          = EXCLUDED.features,
 		    stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at        = NOW()`,
 
@@ -148,17 +152,17 @@ var pgQueries = queries{
 	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = $1`,
 	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = $1`,
 
 	listProducts: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products`,
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, '{}'),$9,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    product_id         = EXCLUDED.product_id,
 		    currency           = EXCLUDED.currency,
@@ -166,12 +170,13 @@ var pgQueries = queries{
 		    recurring_interval = EXCLUDED.recurring_interval,
 		    recurring_count    = EXCLUDED.recurring_count,
 		    active             = EXCLUDED.active,
+		    metadata           = EXCLUDED.metadata,
 		    stripe_created_at  = EXCLUDED.stripe_created_at,
 		    updated_at         = NOW()`,
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
-		       active, stripe_created_at, created_at, updated_at
+		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = $1 ORDER BY unit_amount ASC`,
 
 	markEventProcessing: `
@@ -194,8 +199,8 @@ var myQueries = queries{
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
 		    (id, user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
-		     status, trial_ends_at, current_period_start, current_period_end, canceled_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'))
 		ON DUPLICATE KEY UPDATE
 		    stripe_customer_id      = VALUES(stripe_customer_id),
 		    stripe_subscription_id  = VALUES(stripe_subscription_id),
@@ -206,6 +211,7 @@ var myQueries = queries{
 		    current_period_start    = VALUES(current_period_start),
 		    current_period_end      = VALUES(current_period_end),
 		    canceled_at             = VALUES(canceled_at),
+		    metadata                = VALUES(metadata),
 		    updated_at              = CURRENT_TIMESTAMP`,
 
 	createEmptySub: `
@@ -216,7 +222,7 @@ var myQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE id = ?`,
 
 	findSubByUser: `
@@ -224,7 +230,7 @@ var myQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE user_id = ?`,
 
 	findSubByCustomer: `
@@ -232,7 +238,7 @@ var myQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_customer_id = ?`,
 
 	findSubByStripeID: `
@@ -240,7 +246,7 @@ var myQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ?`,
 
 	incrementUsage: `
@@ -253,37 +259,38 @@ var myQueries = queries{
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = ?`,
 
 	upsertProduct: `
-		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,NOW())
+		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,COALESCE(?, '{}'),COALESCE(?, '[]'),?,NOW())
 		ON DUPLICATE KEY UPDATE
 		    name = VALUES(name), description = VALUES(description),
-		    active = VALUES(active), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
+		    active = VALUES(active), metadata = VALUES(metadata), features = VALUES(features),
+		    stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
 
 	deleteProduct:          `DELETE FROM stripeflow_products WHERE id = ?`,
 	deleteAllProducts:      `DELETE FROM stripeflow_products`,
 	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = ?`,
 	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = ?`,
 
 	listProducts: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products`,
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,NOW())
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,COALESCE(?, '{}'),?,NOW())
 		ON DUPLICATE KEY UPDATE
 		    product_id = VALUES(product_id), currency = VALUES(currency),
 		    unit_amount = VALUES(unit_amount), recurring_interval = VALUES(recurring_interval),
 		    recurring_count = VALUES(recurring_count), active = VALUES(active),
-		    stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
+		    metadata = VALUES(metadata), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
-		       active, stripe_created_at, created_at, updated_at
+		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
 
 	markEventProcessing: `
@@ -301,8 +308,8 @@ var slQueries = queries{
 	upsertSub: `
 		INSERT INTO stripeflow_subscriptions
 		    (user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
-		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'),CURRENT_TIMESTAMP)
 		ON CONFLICT (user_id) DO UPDATE SET
 		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
 		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
@@ -313,6 +320,7 @@ var slQueries = queries{
 		    current_period_start    = EXCLUDED.current_period_start,
 		    current_period_end      = EXCLUDED.current_period_end,
 		    canceled_at             = EXCLUDED.canceled_at,
+		    metadata                = EXCLUDED.metadata,
 		    updated_at              = CURRENT_TIMESTAMP`,
 
 	createEmptySub: `
@@ -323,7 +331,7 @@ var slQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE id = ?`,
 
 	findSubByUser: `
@@ -331,7 +339,7 @@ var slQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE user_id = ?`,
 
 	findSubByCustomer: `
@@ -339,7 +347,7 @@ var slQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_customer_id = ?`,
 
 	findSubByStripeID: `
@@ -347,7 +355,7 @@ var slQueries = queries{
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
 		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
 		       status, trial_ends_at, current_period_start, current_period_end,
-		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		       canceled_at, usage_count, usage_limit, metadata, created_at, updated_at
 		FROM stripeflow_subscriptions WHERE stripe_subscription_id = ?`,
 
 	incrementUsage: `
@@ -361,11 +369,12 @@ var slQueries = queries{
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
 
 	upsertProduct: `
-		INSERT INTO stripeflow_products (id, name, description, active, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,COALESCE(?, '{}'),COALESCE(?, '[]'),?,CURRENT_TIMESTAMP)
 		ON CONFLICT (id) DO UPDATE SET
 		    name = EXCLUDED.name, description = EXCLUDED.description,
-		    active = EXCLUDED.active, stripe_created_at = EXCLUDED.stripe_created_at,
+		    active = EXCLUDED.active, metadata = EXCLUDED.metadata, features = EXCLUDED.features,
+		    stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at = CURRENT_TIMESTAMP`,
 
 	deleteProduct:          `DELETE FROM stripeflow_products WHERE id = ?`,
@@ -373,26 +382,27 @@ var slQueries = queries{
 	deletePricesForProduct: `DELETE FROM stripeflow_prices WHERE product_id = ?`,
 	deleteAllPrices:        `DELETE FROM stripeflow_prices`,
 	getProductByID: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products WHERE id = ?`,
 
 	listProducts: `
-		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), active, metadata, features, stripe_created_at, created_at, updated_at
 		FROM stripeflow_products`,
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,COALESCE(?, '{}'),?,CURRENT_TIMESTAMP)
 		ON CONFLICT (id) DO UPDATE SET
 		    product_id = EXCLUDED.product_id, currency = EXCLUDED.currency,
 		    unit_amount = EXCLUDED.unit_amount, recurring_interval = EXCLUDED.recurring_interval,
 		    recurring_count = EXCLUDED.recurring_count, active = EXCLUDED.active,
+		    metadata = EXCLUDED.metadata,
 		    stripe_created_at = EXCLUDED.stripe_created_at, updated_at = CURRENT_TIMESTAMP`,
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
-		       active, stripe_created_at, created_at, updated_at
+		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
 
 	markEventProcessing: `
@@ -435,24 +445,29 @@ type upsertSubParams struct {
 	CurrentPeriodStart   *time.Time
 	CurrentPeriodEnd     *time.Time
 	CanceledAt           *time.Time
+	Metadata             []byte
 }
 
 func (r *repository) upsertSubscription(ctx context.Context, p upsertSubParams) error {
 	var err error
+	var meta interface{} = p.Metadata
+	if len(p.Metadata) == 0 {
+		meta = nil
+	}
 	if r.q.isMySQL {
 		id := uuid.NewString()
 		_, err = r.db.ExecContext(ctx, r.q.upsertSub,
 			id, p.UserID, nullStr(p.StripeCustomerID), nullStr(p.StripeSubscriptionID),
 			nullStr(p.StripePriceID), nullStr(p.StripeProductID),
 			string(p.Status),
-			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt,
+			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt, meta,
 		)
 	} else {
 		_, err = r.db.ExecContext(ctx, r.q.upsertSub,
 			p.UserID, nullStr(p.StripeCustomerID), nullStr(p.StripeSubscriptionID),
 			nullStr(p.StripePriceID), nullStr(p.StripeProductID),
 			string(p.Status),
-			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt,
+			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt, meta,
 		)
 	}
 	return err
@@ -469,16 +484,21 @@ func (r *repository) createEmptySubscription(ctx context.Context, userID string)
 
 func (r *repository) scanSubscription(row *sql.Row) (*Subscription, error) {
 	sub := &Subscription{}
+	var metaBytes []byte
 	err := row.Scan(
 		&sub.ID, &sub.UserID,
 		&sub.StripeCustomerID, &sub.StripeSubscriptionID,
 		&sub.StripePriceID, &sub.StripeProductID,
 		&sub.Status, &sub.TrialEndsAt, &sub.CurrentPeriodStart, &sub.CurrentPeriodEnd,
-		&sub.CanceledAt, &sub.UsageCount, &sub.UsageLimit,
+		&sub.CanceledAt, &sub.UsageCount, &sub.UsageLimit, &metaBytes,
 		&sub.CreatedAt, &sub.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrNoSubscription
+	}
+	if len(metaBytes) > 0 {
+		m := json.RawMessage(metaBytes)
+		sub.Metadata = &m
 	}
 	return sub, err
 }
@@ -536,8 +556,15 @@ func (r *repository) resetUsage(ctx context.Context, userID string) error {
 // --------------------------------------------------------------------------
 
 func (r *repository) upsertProduct(ctx context.Context, p Product) error {
+	var meta, features interface{}
+	if p.Metadata != nil {
+		meta = []byte(*p.Metadata)
+	}
+	if p.Features != nil {
+		features = []byte(*p.Features)
+	}
 	_, err := r.db.ExecContext(ctx, r.q.upsertProduct,
-		p.ID, p.Name, p.Description, p.Active, p.StripeCreatedAt,
+		p.ID, p.Name, p.Description, p.Active, meta, features, p.StripeCreatedAt,
 	)
 	return err
 }
@@ -563,9 +590,18 @@ func (r *repository) listProducts(ctx context.Context, activeOnly bool) ([]Produ
 	var products []Product
 	for rows.Next() {
 		var p Product
+		var metaBytes, featBytes []byte
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Active,
-			&p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&metaBytes, &featBytes, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if len(metaBytes) > 0 {
+			m := json.RawMessage(metaBytes)
+			p.Metadata = &m
+		}
+		if len(featBytes) > 0 {
+			f := json.RawMessage(featBytes)
+			p.Features = &f
 		}
 		products = append(products, p)
 	}
@@ -573,10 +609,14 @@ func (r *repository) listProducts(ctx context.Context, activeOnly bool) ([]Produ
 }
 
 func (r *repository) upsertPrice(ctx context.Context, p Price) error {
+	var meta interface{}
+	if p.Metadata != nil {
+		meta = []byte(*p.Metadata)
+	}
 	_, err := r.db.ExecContext(ctx, r.q.upsertPrice,
 		p.ID, p.ProductID, p.Currency, p.UnitAmount,
 		nullStr(p.RecurringInterval), p.RecurringCount,
-		p.Active, p.StripeCreatedAt,
+		p.Active, meta, p.StripeCreatedAt,
 	)
 	return err
 }
@@ -591,11 +631,16 @@ func (r *repository) listPricesForProduct(ctx context.Context, productID string)
 	var prices []Price
 	for rows.Next() {
 		var p Price
+		var metaBytes []byte
 		if err := rows.Scan(
 			&p.ID, &p.ProductID, &p.Currency, &p.UnitAmount, &p.RecurringInterval, &p.RecurringCount,
-			&p.Active, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
+			&p.Active, &metaBytes, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if len(metaBytes) > 0 {
+			m := json.RawMessage(metaBytes)
+			p.Metadata = &m
 		}
 		prices = append(prices, p)
 	}
@@ -646,15 +691,24 @@ func (r *repository) getSubscriptionByID(ctx context.Context, id int64) (*Subscr
 
 func (r *repository) getProductByID(ctx context.Context, id string) (*Product, error) {
 	var p Product
+	var metaBytes, featBytes []byte
 	err := r.db.QueryRowContext(ctx, r.q.getProductByID, id).Scan(
 		&p.ID, &p.Name, &p.Description, &p.Active,
-		&p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
+		&metaBytes, &featBytes, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("stripeflow: product not found")
 		}
 		return nil, err
+	}
+	if len(metaBytes) > 0 {
+		m := json.RawMessage(metaBytes)
+		p.Metadata = &m
+	}
+	if len(featBytes) > 0 {
+		f := json.RawMessage(featBytes)
+		p.Features = &f
 	}
 	return &p, nil
 }

@@ -382,6 +382,10 @@ stripeflow.Config{
 | `RequireActiveOrTrial(next) http.Handler` | Allows active + trialing users |
 | `RequireActiveSubscription(next) http.Handler` | Paid subscription only (no trials) |
 | `GetSubscription(ctx, userID) (*Subscription, error)` | Fetch subscription state |
+| `GetSubscriptionByID(ctx, id)` | Fetch subscription by ID |
+| `GetSubscriptionByCustomerID(ctx, customerID)` | Fetch subscription by Stripe customer ID |
+| `GetSubscriptionByStripeSubID(ctx, subID)` | Fetch subscription by Stripe subscription ID |
+| `GetProductByID(ctx, id)` | Fetch product by ID |
 | `IncrementUsage(ctx, userID, delta) (int64, error)` | Atomically increment usage counter |
 | `SetUsageLimit(ctx, userID, *int64) error` | Set or remove usage cap |
 | `ResetUsage(ctx, userID) error` | Zero usage counter |

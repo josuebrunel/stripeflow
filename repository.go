@@ -20,6 +20,7 @@ type queries struct {
 	findSubByUser      string
 	findSubByCustomer  string
 	findSubByStripeID  string
+	findSubByID        string
 	incrementUsage     string
 	setUsageLimit      string
 	resetUsage         string
@@ -27,6 +28,7 @@ type queries struct {
 	// Products
 	upsertProduct string
 	listProducts  string
+	getProductByID string
 
 	// Prices
 	upsertPrice         string
@@ -83,6 +85,14 @@ var pgQueries = queries{
 		VALUES ($1, 'none')
 		ON CONFLICT (user_id) DO NOTHING`,
 
+	findSubByID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE id = $1`,
+
 	findSubByUser: `
 		SELECT id, user_id,
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
@@ -128,6 +138,10 @@ var pgQueries = queries{
 		    active            = EXCLUDED.active,
 		    stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at        = NOW()`,
+
+	getProductByID: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products WHERE id = $1`,
 
 	listProducts: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
@@ -189,6 +203,14 @@ var myQueries = queries{
 	createEmptySub: `
 		INSERT IGNORE INTO stripeflow_subscriptions (id, user_id, status) VALUES (?,?,'none')`,
 
+	findSubByID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE id = ?`,
+
 	findSubByUser: `
 		SELECT id, user_id,
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
@@ -228,6 +250,10 @@ var myQueries = queries{
 		ON DUPLICATE KEY UPDATE
 		    name = VALUES(name), description = VALUES(description),
 		    active = VALUES(active), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
+
+	getProductByID: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products WHERE id = ?`,
 
 	listProducts: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
@@ -280,6 +306,14 @@ var slQueries = queries{
 	createEmptySub: `
 		INSERT OR IGNORE INTO stripeflow_subscriptions (user_id, status) VALUES (?,'none')`,
 
+	findSubByID: `
+		SELECT id, user_id,
+		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
+		       COALESCE(stripe_price_id,''), COALESCE(stripe_product_id,''),
+		       status, trial_ends_at, current_period_start, current_period_end,
+		       canceled_at, usage_count, usage_limit, created_at, updated_at
+		FROM stripeflow_subscriptions WHERE id = ?`,
+
 	findSubByUser: `
 		SELECT id, user_id,
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
@@ -321,6 +355,10 @@ var slQueries = queries{
 		    name = EXCLUDED.name, description = EXCLUDED.description,
 		    active = EXCLUDED.active, stripe_created_at = EXCLUDED.stripe_created_at,
 		    updated_at = CURRENT_TIMESTAMP`,
+
+	getProductByID: `
+		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
+		FROM stripeflow_products WHERE id = ?`,
 
 	listProducts: `
 		SELECT id, name, COALESCE(description,''), active, stripe_created_at, created_at, updated_at
@@ -584,4 +622,23 @@ func nullStr(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func (r *repository) getSubscriptionByID(ctx context.Context, id int64) (*Subscription, error) {
+	return r.scanSubscription(r.db.QueryRowContext(ctx, r.q.findSubByID, id))
+}
+
+func (r *repository) getProductByID(ctx context.Context, id string) (*Product, error) {
+	var p Product
+	err := r.db.QueryRowContext(ctx, r.q.getProductByID, id).Scan(
+		&p.ID, &p.Name, &p.Description, &p.Active,
+		&p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("stripeflow: product not found")
+		}
+		return nil, err
+	}
+	return &p, nil
 }

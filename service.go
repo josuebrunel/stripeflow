@@ -315,3 +315,23 @@ func (c *Client) ListPrices(ctx context.Context, productID string) ([]Price, err
 func (c *Client) GetSubscription(ctx context.Context, userID string) (*Subscription, error) {
 	return c.repo.getSubscriptionByUserID(ctx, userID)
 }
+
+// GetSubscriptionByID retrieves a subscription by its primary key ID.
+func (c *Client) GetSubscriptionByID(ctx context.Context, id int64) (*Subscription, error) {
+	return c.repo.getSubscriptionByID(ctx, id)
+}
+
+// GetSubscriptionByCustomerID retrieves a subscription by Stripe Customer ID.
+func (c *Client) GetSubscriptionByCustomerID(ctx context.Context, customerID string) (*Subscription, error) {
+	return c.repo.getSubscriptionByCustomerID(ctx, customerID)
+}
+
+// GetSubscriptionByStripeSubID retrieves a subscription by Stripe Subscription ID.
+func (c *Client) GetSubscriptionByStripeSubID(ctx context.Context, subID string) (*Subscription, error) {
+	return c.repo.getSubscriptionByStripeSubID(ctx, subID)
+}
+
+// GetProductByID retrieves a product by its ID.
+func (c *Client) GetProductByID(ctx context.Context, id string) (*Product, error) {
+	return c.repo.getProductByID(ctx, id)
+}

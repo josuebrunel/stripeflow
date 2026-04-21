@@ -316,6 +316,7 @@ func TestSQLite(t *testing.T) {
 	t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 	t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
 	t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
+	t.Run("HelperMethods", testHelperMethods(sf))
 }
 
 // --------------------------------------------------------------------------
@@ -343,6 +344,7 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
 		t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
+	t.Run("HelperMethods", testHelperMethods(sf))
 	})
 
 	t.Run("MySQL", func(t *testing.T) {
@@ -353,5 +355,76 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
 		t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
+	t.Run("HelperMethods", testHelperMethods(sf))
 	})
+}
+
+func testHelperMethods(sf *Client) func(t *testing.T) {
+	return func(t *testing.T) {
+		ctx := context.Background()
+
+		// 1. Setup subscription
+		params := upsertSubParams{
+			UserID:               "helper-user",
+			StripeCustomerID:     "cus_helper123",
+			StripeSubscriptionID: "sub_helper456",
+			Status:               StatusActive,
+		}
+		err := sf.repo.upsertSubscription(ctx, params)
+		if err != nil {
+			t.Fatalf("upsert sub: %v", err)
+		}
+
+		// Retrieve by UserID
+		sub1, err := sf.GetSubscription(ctx, "helper-user")
+		if err != nil {
+			t.Fatalf("GetSubscription: %v", err)
+		}
+
+		// Retrieve by ID
+		sub2, err := sf.GetSubscriptionByID(ctx, sub1.ID)
+		if err != nil {
+			t.Fatalf("GetSubscriptionByID: %v", err)
+		}
+		if sub1.ID != sub2.ID {
+			t.Errorf("expected id %v, got %v", sub1.ID, sub2.ID)
+		}
+
+		// Retrieve by Customer ID
+		sub3, err := sf.GetSubscriptionByCustomerID(ctx, "cus_helper123")
+		if err != nil {
+			t.Fatalf("GetSubscriptionByCustomerID: %v", err)
+		}
+		if sub1.ID != sub3.ID {
+			t.Errorf("expected id %v, got %v", sub1.ID, sub3.ID)
+		}
+
+		// Retrieve by Stripe Sub ID
+		sub4, err := sf.GetSubscriptionByStripeSubID(ctx, "sub_helper456")
+		if err != nil {
+			t.Fatalf("GetSubscriptionByStripeSubID: %v", err)
+		}
+		if sub1.ID != sub4.ID {
+			t.Errorf("expected id %v, got %v", sub1.ID, sub4.ID)
+		}
+
+		// 2. Setup product
+		p := Product{
+			ID:     "prod_helper_xyz",
+			Name:   "Helper Product",
+			Active: true,
+		}
+		if err := sf.repo.upsertProduct(ctx, p); err != nil {
+			t.Fatalf("upsert product: %v", err)
+		}
+
+		// Retrieve by ID
+		prod1, err := sf.GetProductByID(ctx, "prod_helper_xyz")
+		if err != nil {
+			t.Fatalf("GetProductByID: %v", err)
+		}
+		if prod1.Name != p.Name {
+			t.Errorf("expected name %s, got %s", p.Name, prod1.Name)
+		}
+	}
 }

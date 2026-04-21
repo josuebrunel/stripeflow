@@ -3,7 +3,10 @@ package stripeflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+
+	"github.com/stripe/stripe-go/v82"
 )
 
 // contextKey is the unexported type used for context values set by stripeflow.
@@ -170,6 +173,22 @@ func (c *Client) checkSubscription(r *http.Request, opt MiddlewareOptions) (*Sub
 //	newCount, err := sf.IncrementUsage(ctx, userID, 1)
 func (c *Client) IncrementUsage(ctx context.Context, userID string, delta int64) (int64, error) {
 	return c.repo.incrementUsage(ctx, userID, delta)
+}
+
+// ReportMeterEvent pushes a high-throughput usage event to Stripe's Billing v2 engine.
+// The eventName must match the EventName of a Stripe Meter.
+//
+//	err := sf.ReportMeterEvent(ctx, stripeCustomerID, "api_check", 1)
+func (c *Client) ReportMeterEvent(ctx context.Context, stripeCustomerID string, eventName string, value int64) error {
+	sc := stripe.NewClient(c.cfg.StripeSecretKey)
+	_, err := sc.V2BillingMeterEvents.Create(ctx, &stripe.V2BillingMeterEventCreateParams{
+		EventName: stripe.String(eventName),
+		Payload: map[string]string{
+			"stripe_customer_id": stripeCustomerID,
+			"value":              fmt.Sprintf("%d", value),
+		},
+	})
+	return err
 }
 
 // SetUsageLimit sets or removes the usage cap for a user.

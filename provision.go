@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v82"
+	stripemeter "github.com/stripe/stripe-go/v82/billing/meter"
 	stripeprice "github.com/stripe/stripe-go/v82/price"
 	stripeproduct "github.com/stripe/stripe-go/v82/product"
 )
@@ -97,6 +98,10 @@ type ProvisionRecurringParams struct {
 	// AggregateUsage is accepted in JSON input for backward compatibility but
 	// is no longer sent to Stripe in v82+. Use Meter instead for metered billing.
 	AggregateUsage string `json:"aggregate_usage,omitempty"`
+	// MeterEventName will auto-create a meter with this event name during provisioning.
+	MeterEventName string `json:"meter_event_name,omitempty"`
+	// MeterDisplayName is the display name for the auto-created meter.
+	MeterDisplayName string `json:"meter_display_name,omitempty"`
 }
 
 // ProvisionTransformQtyParams configures billing per N units.
@@ -229,8 +234,27 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 			}
 			priceParams.Recurring.UsageType = stripe.String(usageType)
 
-			if usageType == "metered" && pi.Recurring.Meter != "" {
-				priceParams.Recurring.Meter = stripe.String(pi.Recurring.Meter)
+			if usageType == "metered" {
+				if pi.Recurring.MeterEventName != "" {
+					displayName := pi.Recurring.MeterDisplayName
+					if displayName == "" {
+						displayName = pi.Recurring.MeterEventName
+					}
+					m, err := stripemeter.New(&stripe.BillingMeterParams{
+						DisplayName: stripe.String(displayName),
+						EventName:   stripe.String(pi.Recurring.MeterEventName),
+						DefaultAggregation: &stripe.BillingMeterDefaultAggregationParams{
+							Formula: stripe.String("count"),
+						},
+					})
+					if err != nil {
+						return result, fmt.Errorf("stripeflow: failed to create meter %q: %w", pi.Recurring.MeterEventName, err)
+					}
+					priceParams.Recurring.Meter = stripe.String(m.ID)
+					slog.Info("stripeflow: meter auto-created", "meter_id", m.ID, "event_name", pi.Recurring.MeterEventName)
+				} else if pi.Recurring.Meter != "" {
+					priceParams.Recurring.Meter = stripe.String(pi.Recurring.Meter)
+				}
 			}
 		}
 

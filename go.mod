@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
+	github.com/josuebrunel/gopkg/xenv v0.0.2
 	github.com/lib/pq v1.12.3
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/stripe/stripe-go/v82 v82.5.1

@@ -50,7 +50,7 @@ import (
 )
 
 sf, err := stripeflow.New(stripeflow.Config{
-    Dialect:         "postgres",               // "postgres" | "mysql" | "sqlite"
+    Dialect:         stripeflow.Postgres,      // stripeflow.Postgres | stripeflow.MySQL | stripeflow.SQLite
     DB:              db,
     StripeSecretKey: os.Getenv("STRIPE_SECRET_KEY"),
     WebhookSecret:   os.Getenv("STRIPE_WEBHOOK_SECRET"),

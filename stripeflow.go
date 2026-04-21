@@ -6,7 +6,7 @@
 // Quick start:
 //
 //	sf, err := stripeflow.New(stripeflow.Config{
-//	    Dialect:         "postgres",
+//	    Dialect:         stripeflow.Postgres,
 //	    DB:              db,
 //	    StripeSecretKey: "sk_live_...",
 //	    WebhookSecret:   "whsec_...",
@@ -39,6 +39,15 @@ var (
 	ErrTrialExpired         = errors.New("stripeflow: trial has expired")
 )
 
+// Dialect specifies the SQL dialect.
+type Dialect string
+
+const (
+	Postgres Dialect = "postgres"
+	MySQL    Dialect = "mysql"
+	SQLite   Dialect = "sqlite"
+)
+
 // SubscriptionStatus mirrors Stripe's subscription statuses plus internal sentinels.
 type SubscriptionStatus string
 
@@ -62,8 +71,8 @@ func (s SubscriptionStatus) IsActive() bool {
 
 // Config holds all configuration needed to initialise a StripeFlow client.
 type Config struct {
-	// Dialect specifies the SQL dialect: "postgres", "mysql", "sqlite", or "sqlite3".
-	Dialect string
+	// Dialect specifies the SQL dialect (Postgres, MySQL, SQLite).
+	Dialect Dialect
 
 	// DB is the *sql.DB connection to use. stripeflow manages its own tables
 	// under the "stripeflow_" namespace.
@@ -94,7 +103,7 @@ type Config struct {
 
 func (c *Config) defaults() {
 	if c.Dialect == "" {
-		c.Dialect = "postgres"
+		c.Dialect = Postgres
 	}
 }
 
@@ -127,7 +136,7 @@ func New(cfg Config) (*Client, error) {
 
 	stripe.Key = cfg.StripeSecretKey
 
-	repo, err := newRepository(cfg.DB, cfg.Dialect)
+	repo, err := newRepository(cfg.DB, string(cfg.Dialect))
 	if err != nil {
 		return nil, err
 	}

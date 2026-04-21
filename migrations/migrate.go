@@ -13,7 +13,8 @@ import (
 //go:embed postgres/*.sql sqlite/*.sql mysql/*.sql
 var embedMigrations embed.FS
 
-func newProvider(db *sql.DB, dialect string) (*goose.Provider, error) {
+// NewProvider creates a new goose.Provider configured for stripeflow migrations.
+func NewProvider(db *sql.DB, dialect string) (*goose.Provider, error) {
 	gooseDialect, err := parseDialect(dialect)
 	if err != nil {
 		return nil, err
@@ -23,13 +24,13 @@ func newProvider(db *sql.DB, dialect string) (*goose.Provider, error) {
 		return nil, fmt.Errorf("failed to get migration subdirectory: %w", err)
 	}
 	return goose.NewProvider(gooseDialect, db, fsys,
-		goose.WithTableName("sf_goose_db_version"),
+		goose.WithTableName("stripeflow_goose_db_version"),
 	)
 }
 
 // MigrateUp applies all pending migrations for the given dialect.
 func MigrateUp(db *sql.DB, dialect string) error {
-	provider, err := newProvider(db, dialect)
+	provider, err := NewProvider(db, dialect)
 	if err != nil {
 		return fmt.Errorf("failed to create migration provider: %w", err)
 	}
@@ -41,7 +42,7 @@ func MigrateUp(db *sql.DB, dialect string) error {
 
 // MigrateDown rolls back all migrations for the given dialect.
 func MigrateDown(db *sql.DB, dialect string) error {
-	provider, err := newProvider(db, dialect)
+	provider, err := NewProvider(db, dialect)
 	if err != nil {
 		return fmt.Errorf("failed to create migration provider: %w", err)
 	}

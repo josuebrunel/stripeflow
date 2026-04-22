@@ -72,7 +72,7 @@ var pgQueries = queries{
 		INSERT INTO stripeflow_subscriptions
 		    (user_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_product_id,
 		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'),NOW())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}')::jsonb,NOW())
 		ON CONFLICT (user_id) DO UPDATE SET
 		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
 		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
@@ -137,7 +137,7 @@ var pgQueries = queries{
 
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
-		VALUES ($1,$2,$3,$4,COALESCE($5, '{}'),COALESCE($6, '[]'),$7,NOW())
+		VALUES ($1,$2,$3,$4,COALESCE($5, '{}')::jsonb,COALESCE($6, '[]')::jsonb,$7,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    name              = EXCLUDED.name,
 		    description       = EXCLUDED.description,
@@ -162,7 +162,7 @@ var pgQueries = queries{
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
 		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, '{}'),$9,NOW())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, '{}')::jsonb,$9,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    product_id         = EXCLUDED.product_id,
 		    currency           = EXCLUDED.currency,

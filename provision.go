@@ -132,18 +132,27 @@ type ProvisionPriceInfo struct {
 // Provision functions
 // --------------------------------------------------------------------------
 
-// ProvisionProductFromJSON is a convenience wrapper that unmarshals raw JSON
-// into ProvisionParams and calls ProvisionProduct. This is useful for CLI tools
-// that accept a JSON file as input.
+// ProvisionProductsFromJSON is a convenience wrapper that unmarshals a JSON array
+// of ProvisionParams and calls ProvisionProduct for each.
 //
-//	raw, _ := os.ReadFile("product.json")
-//	result, err := client.ProvisionProductFromJSON(ctx, raw)
-func (c *Client) ProvisionProductFromJSON(ctx context.Context, data []byte) (*ProvisionResult, error) {
-	var params ProvisionParams
-	if err := json.Unmarshal(data, &params); err != nil {
-		return nil, fmt.Errorf("stripeflow: invalid JSON input: %w", err)
+//	raw, _ := os.ReadFile("products.json")
+//	results, err := client.ProvisionProductsFromJSON(ctx, raw)
+func (c *Client) ProvisionProductsFromJSON(ctx context.Context, data []byte) ([]ProvisionResult, error) {
+	var list []ProvisionParams
+	
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("stripeflow: invalid JSON input (must be an array of products): %w", err)
 	}
-	return c.ProvisionProduct(ctx, params)
+
+	var results []ProvisionResult
+	for _, params := range list {
+		res, err := c.ProvisionProduct(ctx, params)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, *res)
+	}
+	return results, nil
 }
 
 // ProvisionProduct creates a product and all its associated prices in Stripe,

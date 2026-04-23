@@ -25,6 +25,7 @@ type queries struct {
 	incrementUsage     string
 	setUsageLimit      string
 	resetUsage         string
+	deleteSub          string
 
 	// Products
 	upsertProduct string
@@ -134,6 +135,8 @@ var pgQueries = queries{
 
 	resetUsage: `
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = $1`,
+
+	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = $1`,
 
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
@@ -258,6 +261,8 @@ var myQueries = queries{
 	resetUsage: `
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = ?`,
 
+	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = ?`,
+
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
 		VALUES (?,?,?,?,COALESCE(?, '{}'),COALESCE(?, '[]'),?,NOW())
@@ -367,6 +372,8 @@ var slQueries = queries{
 
 	resetUsage: `
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
+
+	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = ?`,
 
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
@@ -548,6 +555,11 @@ func (r *repository) setUsageLimit(ctx context.Context, userID string, limit *in
 
 func (r *repository) resetUsage(ctx context.Context, userID string) error {
 	_, err := r.db.ExecContext(ctx, r.q.resetUsage, userID)
+	return err
+}
+
+func (r *repository) deleteSubscription(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, r.q.deleteSub, userID)
 	return err
 }
 

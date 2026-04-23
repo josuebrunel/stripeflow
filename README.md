@@ -215,9 +215,9 @@ price, err := sf.CreatePrice(ctx, stripeflow.CreatePriceParams{
 })
 ```
 
-### Provision a Full Product from JSON
+### Provision Products from JSON
 
-Use `ProvisionProduct` or `ProvisionProductFromJSON` to create a product and all its prices in a single call. This is ideal for CLI tools, seed scripts, or any workflow where you define your catalogue as JSON.
+Use `ProvisionProduct` or `ProvisionProductsFromJSON` to create your products and all their prices in a single call. This is ideal for CLI tools, seed scripts, or any workflow where you define your catalogue as JSON.
 
 **Programmatic usage:**
 
@@ -256,58 +256,60 @@ result, err := sf.ProvisionProduct(ctx, stripeflow.ProvisionParams{
 **From a JSON file (e.g. in a CLI tool):**
 
 ```go
-raw, err := os.ReadFile("product.json")
+raw, err := os.ReadFile("products.json")
 if err != nil {
     log.Fatal(err)
 }
-result, err := sf.ProvisionProductFromJSON(ctx, raw)
+results, err := sf.ProvisionProductsFromJSON(ctx, raw)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Created product %s with %d prices\n", result.ProductID, len(result.Prices))
+fmt.Printf("Created %d products\n", len(results))
 ```
 
-**Example `product.json`:**
+**Example `products.json`:**
 
 ```json
-{
-  "product": {
-    "name": "My SaaS",
-    "description": "AI-powered analytics platform",
-    "metadata": { "category": "analytics" },
-    "marketing_features": [
-      { "name": "Real-time dashboards" },
-      { "name": "Unlimited team members" }
-    ]
-  },
-  "prices": [
-    {
-      "nickname": "Starter — monthly",
-      "currency": "usd",
-      "billing_scheme": "per_unit",
-      "unit_amount": 2990,
-      "recurring": {
-        "interval": "month",
-        "usage_type": "licensed"
-      }
+[
+  {
+    "product": {
+      "name": "My SaaS",
+      "description": "AI-powered analytics platform",
+      "metadata": { "category": "analytics" },
+      "marketing_features": [
+        { "name": "Real-time dashboards" },
+        { "name": "Unlimited team members" }
+      ]
     },
-    {
-      "nickname": "Metered API calls",
-      "currency": "usd",
-      "billing_scheme": "per_unit",
-      "unit_amount": 1,
-      "recurring": {
-        "interval": "month",
-        "usage_type": "metered",
-        "meter": "mtr_api_calls"
+    "prices": [
+      {
+        "nickname": "Starter — monthly",
+        "currency": "usd",
+        "billing_scheme": "per_unit",
+        "unit_amount": 2990,
+        "recurring": {
+          "interval": "month",
+          "usage_type": "licensed"
+        }
       },
-      "transform_quantity": {
-        "divide_by": 1000,
-        "round": "up"
+      {
+        "nickname": "Metered API calls",
+        "currency": "usd",
+        "billing_scheme": "per_unit",
+        "unit_amount": 1,
+        "recurring": {
+          "interval": "month",
+          "usage_type": "metered",
+          "meter_event_name": "api_calls"
+        },
+        "transform_quantity": {
+          "divide_by": 1000,
+          "round": "up"
+        }
       }
-    }
-  ]
-}
+    ]
+  }
+]
 ```
 
 ---
@@ -378,7 +380,7 @@ stripeflow.Config{
 | `DeleteProduct(ctx, productID) error` | Delete a product and archive its prices in Stripe, and remove locally |
 | `DeleteAllProducts(ctx) error` | Delete all products and prices, removing them locally and from Stripe |
 | `ProvisionProduct(ctx, ProvisionParams) (*ProvisionResult, error)` | Create product + all prices in one call |
-| `ProvisionProductFromJSON(ctx, []byte) (*ProvisionResult, error)` | Same as above, from raw JSON input |
+| `ProvisionProductsFromJSON(ctx, []byte) ([]ProvisionResult, error)` | Provision array of products from JSON |
 
 ### Helpers
 
@@ -451,12 +453,12 @@ Fetches all products and their prices from your Stripe account and upserts them 
 stripeflow -sync
 ```
 
-**Provision a Full Product from JSON:**
+**Provision Products from JSON:**
 
-Creates a product and all its prices in Stripe, and syncs each resource to your local database.
+Creates one or more products and their prices in Stripe, and syncs them to your local database.
 
 ```sh
-stripeflow -provision=product.json
+stripeflow -provision=products.json
 ```
 
 **Delete a Product or All Products:**

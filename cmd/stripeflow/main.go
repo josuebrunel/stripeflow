@@ -110,11 +110,16 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to read provision file: %v", err)
 			}
-			res, err := client.ProvisionProductFromJSON(ctx, data)
+			results, err := client.ProvisionProductsFromJSON(ctx, data)
 			if err != nil {
 				log.Fatalf("Provisioning failed: %v", err)
 			}
-			log.Printf("Provisioned product %s successfully with %d prices.", res.ProductID, len(res.Prices))
+			
+			totalPrices := 0
+			for _, res := range results {
+				totalPrices += len(res.Prices)
+			}
+			log.Printf("Provisioned %d products successfully with %d total prices.", len(results), totalPrices)
 		}
 
 		if *syncFlag {

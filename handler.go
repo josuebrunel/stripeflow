@@ -19,7 +19,7 @@ import (
 // creates a new one and persists it.
 func (c *Client) ensureCustomer(ctx context.Context, userID, email string, meta map[string]string) (string, error) {
 	sub, err := c.repo.getSubscriptionByUserID(ctx, userID)
-	if err == nil && sub.StripeCustomerID != "" {
+	if err == nil && sub.StripeCustomerID != "" && sub.Status != StatusCanceled {
 		return sub.StripeCustomerID, nil
 	}
 
@@ -83,6 +83,15 @@ func (c *Client) CreatePortalSession(ctx context.Context, p PortalParams) (strin
 	}
 	sess, err := session.New(params)
 	if err != nil {
+		// If the error is because the customer was deleted on Stripe but exists in our DB
+		if stripeErr, ok := err.(*stripe.Error); ok && stripeErr.Code == stripe.ErrorCodeResourceMissing {
+			slog.Warn("stripeflow: customer not found on Stripe, recreating", "customer_id", customerID)
+			
+			// Clear the local customer so ensureCustomer will create a new one
+			if delErr := c.repo.deleteSubscription(ctx, p.UserID); delErr == nil {
+				return c.CreatePortalSession(ctx, p) // retry once
+			}
+		}
 		return "", fmt.Errorf("stripeflow: create portal session: %w", err)
 	}
 	return sess.URL, nil

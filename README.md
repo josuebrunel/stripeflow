@@ -91,9 +91,25 @@ log.Fatal(http.ListenAndServe(":8080", mux))
 
 ---
 
-## Billing Portal
+## Checkout & Billing Portal
 
 Both APIs are **programmatic** — they return a URL and you redirect the user.
+
+### Open a Checkout Session
+
+```go
+url, err := sf.CreateCheckoutSession(ctx, stripeflow.CheckoutParams{
+    UserID:     currentUserID,
+    PriceID:    "price_XYZ123",
+    SuccessURL: "https://myapp.com/success",
+    CancelURL:  "https://myapp.com/cancel",
+})
+if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+}
+http.Redirect(w, r, url, http.StatusSeeOther)
+```
 
 ### Open the Billing Portal
 
@@ -356,9 +372,10 @@ stripeflow.Config{
 
 | Method | Description |
 |---|---|
+| `CreateCheckoutSession(ctx, CheckoutParams) (string, error)` | Create a Stripe Checkout session |
 | `CreatePortalSession(ctx, PortalParams) (string, error)` | Create a Stripe Billing Portal session |
 | `WebhookHandler() http.Handler` | Verified webhook event handler |
-| `Handler() http.Handler` | Thin convenience mux (portal + webhook) |
+| `Handler() http.Handler` | Thin convenience mux (checkout + portal + webhook) |
 | `RequireSubscription(next, ...opts) http.Handler` | Subscription-required middleware |
 | `RequireActiveOrTrial(next) http.Handler` | Allows active + trialing users |
 | `RequireActiveSubscription(next) http.Handler` | Paid subscription only (no trials) |

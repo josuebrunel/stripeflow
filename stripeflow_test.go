@@ -289,6 +289,35 @@ func testMiddleware(t *testing.T, sf *Client) {
 }
 
 // --------------------------------------------------------------------------
+// Checkout Handler
+// --------------------------------------------------------------------------
+
+func testCheckoutHandler(t *testing.T, sf *Client) {
+	t.Helper()
+
+	req := httptest.NewRequest("POST", "/checkout", nil)
+	rr := httptest.NewRecorder()
+
+	// Should fail because GetUserID is not in context/header
+	sf.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+
+	// Set required params but mock get user ID
+	req = httptest.NewRequest("POST", "/checkout?plan_id=price_test&success_url=http://example.com/success&cancel_url=http://example.com/cancel", nil)
+	req.Header.Set("X-User-ID", "mw-user")
+	rr = httptest.NewRecorder()
+
+	// Should fail trying to talk to stripe but it passes the handler validation
+	// It should return 500 because it attempts to talk to Stripe with fake keys
+	sf.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Webhook idempotency
 // --------------------------------------------------------------------------
 
@@ -333,6 +362,7 @@ func TestSQLite(t *testing.T) {
 	t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 	t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 	t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
+	t.Run("CheckoutHandler", func(t *testing.T) { testCheckoutHandler(t, sf) })
 	t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
 	t.Run("HelperMethods", testHelperMethods(sf))
 }
@@ -361,8 +391,9 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 		t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
+		t.Run("CheckoutHandler", func(t *testing.T) { testCheckoutHandler(t, sf) })
 		t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
-	t.Run("HelperMethods", testHelperMethods(sf))
+		t.Run("HelperMethods", testHelperMethods(sf))
 	})
 
 	t.Run("MySQL", func(t *testing.T) {
@@ -372,8 +403,9 @@ func TestPostgresAndMySQLIntegration(t *testing.T) {
 		t.Run("CoreOperations", func(t *testing.T) { testCoreOperations(t, sf) })
 		t.Run("ProductOperations", func(t *testing.T) { testProductOperations(t, sf) })
 		t.Run("Middleware", func(t *testing.T) { testMiddleware(t, sf) })
+		t.Run("CheckoutHandler", func(t *testing.T) { testCheckoutHandler(t, sf) })
 		t.Run("WebhookIdempotency", func(t *testing.T) { testWebhookIdempotency(t, sf) })
-	t.Run("HelperMethods", testHelperMethods(sf))
+		t.Run("HelperMethods", testHelperMethods(sf))
 	})
 }
 
@@ -451,47 +483,83 @@ func TestDeleteOperations(t *testing.T) {
 	t.Run("DeleteProducts", func(t *testing.T) {
 		ctx := context.Background()
 		db, err := sql.Open("sqlite", ":memory:")
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer db.Close()
 		repo, err := newRepository(db, string(SQLite))
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		client := &Client{repo: repo}
 		// Create the schema manually for tests
 		_, err = db.Exec(`CREATE TABLE stripeflow_products (id TEXT PRIMARY KEY, name TEXT, description TEXT, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, err = db.Exec(`CREATE TABLE stripeflow_prices (id TEXT PRIMARY KEY, product_id TEXT, currency TEXT, unit_amount INTEGER, recurring_interval TEXT, recurring_count INTEGER, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// Insert dummy data
 		_, err = db.Exec("INSERT INTO stripeflow_products (id, name, active) VALUES (?, ?, ?)", "prod_1", "Product 1", 1)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, err = db.Exec("INSERT INTO stripeflow_prices (id, product_id, currency, active) VALUES (?, ?, ?, ?)", "price_1", "prod_1", "usd", 1)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		err = client.repo.deleteProduct(ctx, "prod_1")
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		var count int
 		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_products").Scan(&count)
 		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_prices").Scan(&count)
-		if err != nil { t.Fatal(err) }
-		if count != 0 { t.Fatalf("expected 0 prices, got %d", count) }
-		if err != nil { t.Fatal(err) }
-		if count != 0 { t.Fatalf("expected 0 products, got %d", count) }
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 prices, got %d", count)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 products, got %d", count)
+		}
 
 		// Now Test DeleteAllProducts
 		_, err = db.Exec("INSERT INTO stripeflow_products (id, name, active) VALUES (?, ?, ?)", "prod_2", "Product 2", 1)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, err = db.Exec("INSERT INTO stripeflow_prices (id, product_id, currency, active) VALUES (?, ?, ?, ?)", "price_2", "prod_2", "usd", 1)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		err = client.repo.deleteAllProducts(ctx)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_products").Scan(&count)
 		err = db.QueryRow("SELECT COUNT(*) FROM stripeflow_prices").Scan(&count)
-		if err != nil { t.Fatal(err) }
-		if count != 0 { t.Fatalf("expected 0 prices, got %d", count) }
-		if err != nil { t.Fatal(err) }
-		if count != 0 { t.Fatalf("expected 0 products, got %d", count) }
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 prices, got %d", count)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 products, got %d", count)
+		}
 	})
 }

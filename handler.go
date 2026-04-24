@@ -11,6 +11,7 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/billingportal/session"
+	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/customer"
 	"github.com/stripe/stripe-go/v82/webhook"
 )
@@ -46,6 +47,79 @@ func (c *Client) ensureCustomer(ctx context.Context, userID, email string, meta 
 		return "", fmt.Errorf("stripeflow: store customer id: %w", err)
 	}
 	return cust.ID, nil
+}
+
+// --------------------------------------------------------------------------
+// Checkout
+// --------------------------------------------------------------------------
+
+// CheckoutParams holds options for creating a Stripe Checkout session.
+type CheckoutParams struct {
+	UserID     string
+	PriceID    string
+	SuccessURL string
+	CancelURL  string
+	TrialDays  *int64
+}
+
+// CreateCheckoutSession creates a Stripe Checkout session to subscribe a user
+// to a specific price. Returns the checkout URL to redirect the user to.
+func (c *Client) CreateCheckoutSession(ctx context.Context, p CheckoutParams) (string, error) {
+	if p.UserID == "" {
+		return "", fmt.Errorf("stripeflow: UserID is required")
+	}
+	if p.PriceID == "" {
+		return "", fmt.Errorf("stripeflow: PriceID is required")
+	}
+	if p.SuccessURL == "" {
+		return "", fmt.Errorf("stripeflow: SuccessURL is required")
+	}
+	if p.CancelURL == "" {
+		return "", fmt.Errorf("stripeflow: CancelURL is required")
+	}
+
+	if err := c.repo.createEmptySubscription(ctx, p.UserID); err != nil {
+		return "", fmt.Errorf("stripeflow: ensure subscription row: %w", err)
+	}
+
+	customerID, err := c.ensureCustomer(ctx, p.UserID, "", nil)
+	if err != nil {
+		return "", fmt.Errorf("stripeflow: ensure customer: %w", err)
+	}
+
+	params := &stripe.CheckoutSessionParams{
+		Customer:   stripe.String(customerID),
+		SuccessURL: stripe.String(p.SuccessURL),
+		CancelURL:  stripe.String(p.CancelURL),
+		Mode:       stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		LineItems: []*stripe.CheckoutSessionLineItemParams{
+			{
+				Price:    stripe.String(p.PriceID),
+				Quantity: stripe.Int64(1),
+			},
+		},
+		Metadata: map[string]string{"stripeflow_user_id": p.UserID},
+	}
+
+	params.SubscriptionData = &stripe.CheckoutSessionSubscriptionDataParams{
+		Metadata: map[string]string{"stripeflow_user_id": p.UserID},
+	}
+
+	var trialDays int64
+	if p.TrialDays != nil {
+		trialDays = *p.TrialDays
+	} else if c.cfg.TrialDays > 0 {
+		trialDays = c.cfg.TrialDays
+	}
+	if trialDays > 0 {
+		params.SubscriptionData.TrialPeriodDays = stripe.Int64(trialDays)
+	}
+
+	sess, err := checkoutsession.New(params)
+	if err != nil {
+		return "", fmt.Errorf("stripeflow: create checkout session: %w", err)
+	}
+	return sess.URL, nil
 }
 
 // --------------------------------------------------------------------------
@@ -86,7 +160,7 @@ func (c *Client) CreatePortalSession(ctx context.Context, p PortalParams) (strin
 		// If the error is because the customer was deleted on Stripe but exists in our DB
 		if stripeErr, ok := err.(*stripe.Error); ok && stripeErr.Code == stripe.ErrorCodeResourceMissing {
 			slog.Warn("stripeflow: customer not found on Stripe, recreating", "customer_id", customerID)
-			
+
 			// Clear the local customer so ensureCustomer will create a new one
 			if delErr := c.repo.deleteSubscription(ctx, p.UserID); delErr == nil {
 				return c.CreatePortalSession(ctx, p) // retry once
@@ -101,20 +175,62 @@ func (c *Client) CreatePortalSession(ctx context.Context, p PortalParams) (strin
 // Convenience Handler (thin mux)
 // --------------------------------------------------------------------------
 
-// Handler returns an http.Handler that mounts the portal and
-// webhook routes. For full control over routing, call CreatePortalSession
-// and WebhookHandler directly instead.
+// Handler returns an http.Handler that mounts the checkout, portal and
+// webhook routes. For full control over routing, call CreateCheckoutSession,
+// CreatePortalSession and WebhookHandler directly instead.
 //
+//	POST /checkout  — creates a Checkout session, redirects to Stripe
 //	GET  /portal    — creates a Billing Portal session, redirects to Stripe
 //	POST /webhook   — receives and processes Stripe webhook events
 func (c *Client) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /checkout", c.handleCheckoutRedirect)
 	mux.HandleFunc("GET /portal", c.handlePortalRedirect)
 	mux.Handle("POST /webhook", c.WebhookHandler())
 	return mux
 }
 
+func (c *Client) handleCheckoutRedirect(w http.ResponseWriter, r *http.Request) {
+	if c.cfg.GetUserID == nil {
+		http.Error(w, "stripeflow: GetUserID not configured", http.StatusInternalServerError)
+		return
+	}
+	userID, err := c.cfg.GetUserID(r)
+	if err != nil || userID == "" {
+		slog.Error("checkout: could not get user", "error", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
+	planID := r.FormValue("plan_id")
+	if planID == "" {
+		http.Error(w, "plan_id is required", http.StatusBadRequest)
+		return
+	}
+	successURL := r.FormValue("success_url")
+	if successURL == "" {
+		http.Error(w, "success_url is required", http.StatusBadRequest)
+		return
+	}
+	cancelURL := r.FormValue("cancel_url")
+	if cancelURL == "" {
+		http.Error(w, "cancel_url is required", http.StatusBadRequest)
+		return
+	}
+
+	url, err := c.CreateCheckoutSession(r.Context(), CheckoutParams{
+		UserID:     userID,
+		PriceID:    planID,
+		SuccessURL: successURL,
+		CancelURL:  cancelURL,
+	})
+	if err != nil {
+		slog.Error("checkout: create session failed", "error", err)
+		http.Error(w, "Failed to create checkout session", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, url, http.StatusSeeOther)
+}
 
 func (c *Client) handlePortalRedirect(w http.ResponseWriter, r *http.Request) {
 	if c.cfg.GetUserID == nil {
@@ -276,7 +392,6 @@ func (c *Client) dispatchEvent(ctx context.Context, event *stripe.Event) error {
 // --------------------------------------------------------------------------
 // Event handlers
 // --------------------------------------------------------------------------
-
 
 func (c *Client) onSubscriptionUpdated(ctx context.Context, sub *stripe.Subscription) error {
 	existing, err := c.repo.getSubscriptionByCustomerID(ctx, sub.Customer.ID)

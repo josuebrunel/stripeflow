@@ -114,7 +114,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("Provisioning failed: %v", err)
 			}
-			
+
 			totalPrices := 0
 			for _, res := range results {
 				totalPrices += len(res.Prices)
@@ -127,8 +127,6 @@ func main() {
 			if err != nil {
 				log.Fatalf("Sync failed: %v", err)
 			}
-
-
 
 			log.Printf("Sync completed: %d products and %d prices upserted.", res.ProductsUpserted, res.PricesUpserted)
 		}

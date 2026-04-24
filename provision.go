@@ -118,8 +118,8 @@ type ProvisionTransformQtyParams struct {
 
 // ProvisionResult contains the IDs of all resources created by ProvisionProduct.
 type ProvisionResult struct {
-	ProductID string                `json:"product_id"`
-	Prices    []ProvisionPriceInfo  `json:"prices"`
+	ProductID string               `json:"product_id"`
+	Prices    []ProvisionPriceInfo `json:"prices"`
 }
 
 // ProvisionPriceInfo describes a single price created during provisioning.
@@ -139,7 +139,7 @@ type ProvisionPriceInfo struct {
 //	results, err := client.ProvisionProductsFromJSON(ctx, raw)
 func (c *Client) ProvisionProductsFromJSON(ctx context.Context, data []byte) ([]ProvisionResult, error) {
 	var list []ProvisionParams
-	
+
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("stripeflow: invalid JSON input (must be an array of products): %w", err)
 	}

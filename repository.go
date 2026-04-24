@@ -17,7 +17,6 @@ import (
 type queries struct {
 	// Subscriptions
 	upsertSub         string
-	createEmptySub    string
 	findSubByUser     string
 	findSubByCustomer string
 	findSubByStripeID string
@@ -86,11 +85,6 @@ var pgQueries = queries{
 		    canceled_at             = EXCLUDED.canceled_at,
 		    metadata                = EXCLUDED.metadata,
 		    updated_at              = NOW()`,
-
-	createEmptySub: `
-		INSERT INTO stripeflow_subscriptions (user_id, status)
-		VALUES ($1, 'none')
-		ON CONFLICT (user_id) DO NOTHING`,
 
 	findSubByID: `
 		SELECT id, user_id,
@@ -217,9 +211,6 @@ var myQueries = queries{
 		    metadata                = VALUES(metadata),
 		    updated_at              = CURRENT_TIMESTAMP`,
 
-	createEmptySub: `
-		INSERT IGNORE INTO stripeflow_subscriptions (id, user_id, status) VALUES (?,?,'none')`,
-
 	findSubByID: `
 		SELECT id, user_id,
 		       COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''),
@@ -327,9 +318,6 @@ var slQueries = queries{
 		    canceled_at             = EXCLUDED.canceled_at,
 		    metadata                = EXCLUDED.metadata,
 		    updated_at              = CURRENT_TIMESTAMP`,
-
-	createEmptySub: `
-		INSERT OR IGNORE INTO stripeflow_subscriptions (user_id, status) VALUES (?,'none')`,
 
 	findSubByID: `
 		SELECT id, user_id,
@@ -477,15 +465,6 @@ func (r *repository) upsertSubscription(ctx context.Context, p upsertSubParams) 
 			p.TrialEndsAt, p.CurrentPeriodStart, p.CurrentPeriodEnd, p.CanceledAt, meta,
 		)
 	}
-	return err
-}
-
-func (r *repository) createEmptySubscription(ctx context.Context, userID string) error {
-	if r.q.isMySQL {
-		_, err := r.db.ExecContext(ctx, r.q.createEmptySub, uuid.NewString(), userID)
-		return err
-	}
-	_, err := r.db.ExecContext(ctx, r.q.createEmptySub, userID)
 	return err
 }
 

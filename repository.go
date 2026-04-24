@@ -16,25 +16,25 @@ import (
 
 type queries struct {
 	// Subscriptions
-	upsertSub          string
-	createEmptySub     string
-	findSubByUser      string
-	findSubByCustomer  string
-	findSubByStripeID  string
-	findSubByID        string
-	incrementUsage     string
-	setUsageLimit      string
-	resetUsage         string
-	deleteSub          string
+	upsertSub         string
+	createEmptySub    string
+	findSubByUser     string
+	findSubByCustomer string
+	findSubByStripeID string
+	findSubByID       string
+	incrementUsage    string
+	setUsageLimit     string
+	resetUsage        string
+	deleteSub         string
 
 	// Products
-	upsertProduct string
-	listProducts  string
-	getProductByID string
-	deleteProduct  string
-	deleteAllProducts string
+	upsertProduct          string
+	listProducts           string
+	getProductByID         string
+	deleteProduct          string
+	deleteAllProducts      string
 	deletePricesForProduct string
-	deleteAllPrices string
+	deleteAllPrices        string
 
 	// Prices
 	upsertPrice         string
@@ -726,39 +726,39 @@ func (r *repository) getProductByID(ctx context.Context, id string) (*Product, e
 }
 
 func (r *repository) deleteProduct(ctx context.Context, id string) error {
-    tx, err := r.db.BeginTx(ctx, nil)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
-    // Delete prices first
-    if _, err := tx.ExecContext(ctx, r.q.deletePricesForProduct, id); err != nil {
-        return err
-    }
-    // Delete product
-    if _, err := tx.ExecContext(ctx, r.q.deleteProduct, id); err != nil {
-        return err
-    }
+	// Delete prices first
+	if _, err := tx.ExecContext(ctx, r.q.deletePricesForProduct, id); err != nil {
+		return err
+	}
+	// Delete product
+	if _, err := tx.ExecContext(ctx, r.q.deleteProduct, id); err != nil {
+		return err
+	}
 
-    return tx.Commit()
+	return tx.Commit()
 }
 
 func (r *repository) deleteAllProducts(ctx context.Context) error {
-    tx, err := r.db.BeginTx(ctx, nil)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
-    // Delete all prices first
-    if _, err := tx.ExecContext(ctx, r.q.deleteAllPrices); err != nil {
-        return err
-    }
-    // Delete all products
-    if _, err := tx.ExecContext(ctx, r.q.deleteAllProducts); err != nil {
-        return err
-    }
+	// Delete all prices first
+	if _, err := tx.ExecContext(ctx, r.q.deleteAllPrices); err != nil {
+		return err
+	}
+	// Delete all products
+	if _, err := tx.ExecContext(ctx, r.q.deleteAllProducts); err != nil {
+		return err
+	}
 
-    return tx.Commit()
+	return tx.Commit()
 }

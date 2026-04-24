@@ -60,6 +60,7 @@ type CheckoutParams struct {
 	SuccessURL string
 	CancelURL  string
 	TrialDays  *int64
+	Metadata   map[string]string
 }
 
 // CreateCheckoutSession creates a Stripe Checkout session to subscribe a user
@@ -78,13 +79,14 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, p CheckoutParams) (s
 		return "", fmt.Errorf("stripeflow: CancelURL is required")
 	}
 
-	if err := c.repo.createEmptySubscription(ctx, p.UserID); err != nil {
-		return "", fmt.Errorf("stripeflow: ensure subscription row: %w", err)
-	}
-
-	customerID, err := c.ensureCustomer(ctx, p.UserID, "", nil)
+	customerID, err := c.ensureCustomer(ctx, p.UserID, "", p.Metadata)
 	if err != nil {
 		return "", fmt.Errorf("stripeflow: ensure customer: %w", err)
+	}
+
+	meta := map[string]string{"stripeflow_user_id": p.UserID}
+	for k, v := range p.Metadata {
+		meta[k] = v
 	}
 
 	params := &stripe.CheckoutSessionParams{
@@ -98,11 +100,11 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, p CheckoutParams) (s
 				Quantity: stripe.Int64(1),
 			},
 		},
-		Metadata: map[string]string{"stripeflow_user_id": p.UserID},
+		Metadata: meta,
 	}
 
 	params.SubscriptionData = &stripe.CheckoutSessionSubscriptionDataParams{
-		Metadata: map[string]string{"stripeflow_user_id": p.UserID},
+		Metadata: meta,
 	}
 
 	var trialDays int64
@@ -142,29 +144,24 @@ func (c *Client) CreatePortalSession(ctx context.Context, p PortalParams) (strin
 		return "", fmt.Errorf("stripeflow: UserID is required")
 	}
 
-	if err := c.repo.createEmptySubscription(ctx, p.UserID); err != nil {
-		return "", fmt.Errorf("stripeflow: ensure subscription row: %w", err)
-	}
-
-	customerID, err := c.ensureCustomer(ctx, p.UserID, "", nil)
+	sub, err := c.repo.getSubscriptionByUserID(ctx, p.UserID)
 	if err != nil {
-		return "", fmt.Errorf("stripeflow: ensure customer: %w", err)
+		return "", fmt.Errorf("stripeflow: no subscription found for user: %w", err)
+	}
+	if sub.StripeCustomerID == "" {
+		return "", fmt.Errorf("stripeflow: no stripe customer associated with user")
 	}
 
 	params := &stripe.BillingPortalSessionParams{
-		Customer:  stripe.String(customerID),
+		Customer:  stripe.String(sub.StripeCustomerID),
 		ReturnURL: stripe.String(p.ReturnURL),
 	}
 	sess, err := session.New(params)
 	if err != nil {
 		// If the error is because the customer was deleted on Stripe but exists in our DB
 		if stripeErr, ok := err.(*stripe.Error); ok && stripeErr.Code == stripe.ErrorCodeResourceMissing {
-			slog.Warn("stripeflow: customer not found on Stripe, recreating", "customer_id", customerID)
-
-			// Clear the local customer so ensureCustomer will create a new one
-			if delErr := c.repo.deleteSubscription(ctx, p.UserID); delErr == nil {
-				return c.CreatePortalSession(ctx, p) // retry once
-			}
+			slog.Warn("stripeflow: customer not found on Stripe, removing local subscription", "customer_id", sub.StripeCustomerID)
+			_ = c.repo.deleteSubscription(ctx, p.UserID)
 		}
 		return "", fmt.Errorf("stripeflow: create portal session: %w", err)
 	}

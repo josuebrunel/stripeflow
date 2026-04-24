@@ -75,9 +75,13 @@ func testCoreOperations(t *testing.T, sf *Client) {
 	t.Helper()
 	ctx := context.Background()
 
-	// Create empty subscription row for user.
-	if err := sf.repo.createEmptySubscription(ctx, "user-123"); err != nil {
-		t.Fatalf("createEmptySubscription: %v", err)
+	// Insert an initial subscription.
+	now := time.Now().UTC()
+	if err := sf.repo.upsertSubscription(ctx, upsertSubParams{
+		UserID: "user-123",
+		Status: StatusNone,
+	}); err != nil {
+		t.Fatalf("upsert initial subscription: %v", err)
 	}
 
 	// Subscription should be in 'none' state.
@@ -90,7 +94,6 @@ func testCoreOperations(t *testing.T, sf *Client) {
 	}
 
 	// Upsert an active subscription.
-	now := time.Now().UTC()
 	end := now.AddDate(0, 1, 0)
 	if err := sf.repo.upsertSubscription(ctx, upsertSubParams{
 		UserID:               "user-123",
@@ -232,9 +235,6 @@ func testMiddleware(t *testing.T, sf *Client) {
 	ctx := context.Background()
 
 	// Seed a user with an active subscription.
-	if err := sf.repo.createEmptySubscription(ctx, "mw-user"); err != nil {
-		t.Fatalf("createEmptySubscription: %v", err)
-	}
 	now := time.Now().UTC()
 	end := now.AddDate(0, 1, 0)
 	if err := sf.repo.upsertSubscription(ctx, upsertSubParams{

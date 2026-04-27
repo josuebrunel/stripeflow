@@ -220,6 +220,12 @@ func (c *Client) CreatePrice(ctx context.Context, p CreatePriceParams) (*Price, 
 		local.RecurringInterval = string(price.Recurring.Interval)
 		count := int(price.Recurring.IntervalCount)
 		local.RecurringCount = &count
+		local.UsageType = string(price.Recurring.UsageType)
+	}
+	local.Type = string(price.Type)
+	local.Nickname = price.Nickname
+	if price.LookupKey != "" {
+		local.LookupKey = price.LookupKey
 	}
 	if price.Created != 0 {
 		t := time.Unix(price.Created, 0)
@@ -324,6 +330,12 @@ func (c *Client) SyncProducts(ctx context.Context) (*SyncResult, error) {
 			lp.RecurringInterval = string(price.Recurring.Interval)
 			count := int(price.Recurring.IntervalCount)
 			lp.RecurringCount = &count
+			lp.UsageType = string(price.Recurring.UsageType)
+		}
+		lp.Type = string(price.Type)
+		lp.Nickname = price.Nickname
+		if price.LookupKey != "" {
+			lp.LookupKey = price.LookupKey
 		}
 		if err := c.repo.upsertPrice(ctx, lp); err != nil {
 			return result, fmt.Errorf("stripeflow: sync price %s: %w", price.ID, err)

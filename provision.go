@@ -299,6 +299,12 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 			lp.RecurringInterval = string(price.Recurring.Interval)
 			count := int(price.Recurring.IntervalCount)
 			lp.RecurringCount = &count
+			lp.UsageType = string(price.Recurring.UsageType)
+		}
+		lp.Type = string(price.Type)
+		lp.Nickname = price.Nickname
+		if price.LookupKey != "" {
+			lp.LookupKey = price.LookupKey
 		}
 		if price.Created != 0 {
 			t := time.Unix(price.Created, 0)

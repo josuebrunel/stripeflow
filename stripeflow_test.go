@@ -207,6 +207,9 @@ func testProductOperations(t *testing.T, sf *Client) {
 		UnitAmount:        &ua,
 		RecurringInterval: "month",
 		RecurringCount:    &count,
+		UsageType:         "licensed",
+		Type:              "recurring",
+		Nickname:          "Pro Plan — monthly",
 		Active:            true,
 		Metadata:          &pm,
 		StripeCreatedAt:   &now,
@@ -493,11 +496,31 @@ func TestDeleteOperations(t *testing.T) {
 		}
 		client := &Client{repo: repo}
 		// Create the schema manually for tests
-		_, err = db.Exec(`CREATE TABLE stripeflow_products (id TEXT PRIMARY KEY, name TEXT, description TEXT, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
+		_, err = db.Exec(`CREATE TABLE stripeflow_products (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+			active INTEGER NOT NULL DEFAULT 1,
+			metadata TEXT NOT NULL DEFAULT '{}',
+			features TEXT NOT NULL DEFAULT '[]',
+			stripe_created_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = db.Exec(`CREATE TABLE stripeflow_prices (id TEXT PRIMARY KEY, product_id TEXT, currency TEXT, unit_amount INTEGER, recurring_interval TEXT, recurring_count INTEGER, active INTEGER, stripe_created_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`)
+		_, err = db.Exec(`CREATE TABLE stripeflow_prices (
+			id TEXT PRIMARY KEY, product_id TEXT NOT NULL, currency TEXT NOT NULL,
+			unit_amount INTEGER, recurring_interval TEXT, recurring_count INTEGER,
+			usage_type TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT '',
+			nickname TEXT NOT NULL DEFAULT '',
+			lookup_key TEXT NOT NULL DEFAULT '',
+			active INTEGER NOT NULL DEFAULT 1,
+			metadata TEXT NOT NULL DEFAULT '{}',
+			stripe_created_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`)
 		if err != nil {
 			t.Fatal(err)
 		}

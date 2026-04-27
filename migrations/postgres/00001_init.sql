@@ -23,6 +23,10 @@ CREATE TABLE stripeflow_prices (
     unit_amount        BIGINT,              -- smallest currency unit (e.g. cents)
     recurring_interval TEXT,               -- month | year | week | day | NULL for one-time
     recurring_count    INTEGER,
+    usage_type         TEXT    NOT NULL DEFAULT '',  -- licensed | metered | empty for one-time
+    type               TEXT    NOT NULL DEFAULT '',  -- recurring | one_time
+    nickname           TEXT    NOT NULL DEFAULT '',  -- human-readable label from Stripe
+    lookup_key         TEXT    NOT NULL DEFAULT '',  -- stable key for referencing without ID
     active             BOOLEAN NOT NULL DEFAULT TRUE,
     metadata           JSONB   NOT NULL DEFAULT '{}',
     stripe_created_at  TIMESTAMPTZ,

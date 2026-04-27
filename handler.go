@@ -586,6 +586,12 @@ func (c *Client) onPriceUpserted(ctx context.Context, p *stripe.Price) error {
 		lp.RecurringInterval = string(p.Recurring.Interval)
 		count := int(p.Recurring.IntervalCount)
 		lp.RecurringCount = &count
+		lp.UsageType = string(p.Recurring.UsageType)
+	}
+	lp.Type = string(p.Type)
+	lp.Nickname = p.Nickname
+	if p.LookupKey != "" {
+		lp.LookupKey = p.LookupKey
 	}
 	return c.repo.upsertPrice(ctx, lp)
 }

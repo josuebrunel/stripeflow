@@ -158,14 +158,18 @@ var pgQueries = queries{
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, '{}')::jsonb,$9,NOW())
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, usage_type, type, nickname, lookup_key, active, metadata, stripe_created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, '{}')::jsonb,$13,NOW())
 		ON CONFLICT (id) DO UPDATE SET
 		    product_id         = EXCLUDED.product_id,
 		    currency           = EXCLUDED.currency,
 		    unit_amount        = EXCLUDED.unit_amount,
 		    recurring_interval = EXCLUDED.recurring_interval,
 		    recurring_count    = EXCLUDED.recurring_count,
+		    usage_type         = EXCLUDED.usage_type,
+		    type               = EXCLUDED.type,
+		    nickname           = EXCLUDED.nickname,
+		    lookup_key         = EXCLUDED.lookup_key,
 		    active             = EXCLUDED.active,
 		    metadata           = EXCLUDED.metadata,
 		    stripe_created_at  = EXCLUDED.stripe_created_at,
@@ -173,6 +177,7 @@ var pgQueries = queries{
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       COALESCE(usage_type,''), COALESCE(type,''), COALESCE(nickname,''), COALESCE(lookup_key,''),
 		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = $1 ORDER BY unit_amount ASC`,
 
@@ -276,16 +281,19 @@ var myQueries = queries{
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,COALESCE(?, '{}'),?,NOW())
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, usage_type, type, nickname, lookup_key, active, metadata, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'),?,NOW())
 		ON DUPLICATE KEY UPDATE
 		    product_id = VALUES(product_id), currency = VALUES(currency),
 		    unit_amount = VALUES(unit_amount), recurring_interval = VALUES(recurring_interval),
-		    recurring_count = VALUES(recurring_count), active = VALUES(active),
+		    recurring_count = VALUES(recurring_count), usage_type = VALUES(usage_type),
+		    type = VALUES(type), nickname = VALUES(nickname), lookup_key = VALUES(lookup_key),
+		    active = VALUES(active),
 		    metadata = VALUES(metadata), stripe_created_at = VALUES(stripe_created_at), updated_at = NOW()`,
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       COALESCE(usage_type,''), COALESCE(type,''), COALESCE(nickname,''), COALESCE(lookup_key,''),
 		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
 
@@ -386,17 +394,20 @@ var slQueries = queries{
 
 	upsertPrice: `
 		INSERT INTO stripeflow_prices
-		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, active, metadata, stripe_created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,COALESCE(?, '{}'),?,CURRENT_TIMESTAMP)
+		    (id, product_id, currency, unit_amount, recurring_interval, recurring_count, usage_type, type, nickname, lookup_key, active, metadata, stripe_created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'),?,CURRENT_TIMESTAMP)
 		ON CONFLICT (id) DO UPDATE SET
 		    product_id = EXCLUDED.product_id, currency = EXCLUDED.currency,
 		    unit_amount = EXCLUDED.unit_amount, recurring_interval = EXCLUDED.recurring_interval,
-		    recurring_count = EXCLUDED.recurring_count, active = EXCLUDED.active,
+		    recurring_count = EXCLUDED.recurring_count, usage_type = EXCLUDED.usage_type,
+		    type = EXCLUDED.type, nickname = EXCLUDED.nickname, lookup_key = EXCLUDED.lookup_key,
+		    active = EXCLUDED.active,
 		    metadata = EXCLUDED.metadata,
 		    stripe_created_at = EXCLUDED.stripe_created_at, updated_at = CURRENT_TIMESTAMP`,
 
 	listPricesByProduct: `
 		SELECT id, product_id, currency, unit_amount, COALESCE(recurring_interval,''), recurring_count,
+		       COALESCE(usage_type,''), COALESCE(type,''), COALESCE(nickname,''), COALESCE(lookup_key,''),
 		       active, metadata, stripe_created_at, created_at, updated_at
 		FROM stripeflow_prices WHERE product_id = ? ORDER BY unit_amount ASC`,
 
@@ -607,6 +618,7 @@ func (r *repository) upsertPrice(ctx context.Context, p Price) error {
 	_, err := r.db.ExecContext(ctx, r.q.upsertPrice,
 		p.ID, p.ProductID, p.Currency, p.UnitAmount,
 		nullStr(p.RecurringInterval), p.RecurringCount,
+		p.UsageType, p.Type, p.Nickname, p.LookupKey,
 		p.Active, meta, p.StripeCreatedAt,
 	)
 	return err
@@ -625,6 +637,7 @@ func (r *repository) listPricesForProduct(ctx context.Context, productID string)
 		var metaBytes []byte
 		if err := rows.Scan(
 			&p.ID, &p.ProductID, &p.Currency, &p.UnitAmount, &p.RecurringInterval, &p.RecurringCount,
+			&p.UsageType, &p.Type, &p.Nickname, &p.LookupKey,
 			&p.Active, &metaBytes, &p.StripeCreatedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, err

@@ -3,9 +3,19 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version tag (e.g., v1.0.0)'
+      bump:
+        description: 'Version bump type'
         required: true
+        type: choice
+        options:
+          - manual
+          - patch
+          - minor
+          - major
+        default: manual
+      version:
+        description: 'Version tag (e.g., v1.0.0, required if bump is manual)'
+        required: false
         type: string
 
 jobs:
@@ -17,11 +27,52 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        run: |
+          if [ "${{ github.event.inputs.bump }}" = "manual" ]; then
+            if [ -z "${{ github.event.inputs.version }}" ]; then
+              echo "Error: version is required for manual bump"
+              exit 1
+            fi
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_TAG" ]; then
+              LATEST_TAG="v0.0.0"
+            fi
+
+            if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              MAJOR="${BASH_REMATCH[1]}"
+              MINOR="${BASH_REMATCH[2]}"
+              PATCH="${BASH_REMATCH[3]}"
+
+              if [ "${{ github.event.inputs.bump }}" = "major" ]; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif [ "${{ github.event.inputs.bump }}" = "minor" ]; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              elif [ "${{ github.event.inputs.bump }}" = "patch" ]; then
+                PATCH=$((PATCH + 1))
+              fi
+              VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+            else
+              echo "Error parsing latest tag: $LATEST_TAG"
+              exit 1
+            fi
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "Determined version: $VERSION"
 
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.event.inputs.version }} \
-            --title "Release ${{ github.event.inputs.version }}" \
+          gh release create ${{ env.VERSION }} \
+            --title "Release ${{ env.VERSION }}" \
             --generate-notes

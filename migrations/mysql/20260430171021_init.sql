@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE stripeflow_products (
+CREATE TABLE IF NOT EXISTS stripeflow_products (
     id                VARCHAR(255) PRIMARY KEY,
     name              VARCHAR(255) NOT NULL,
     description       TEXT,
@@ -12,7 +12,7 @@ CREATE TABLE stripeflow_products (
     updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
-CREATE TABLE stripeflow_prices (
+CREATE TABLE IF NOT EXISTS stripeflow_prices (
     id                 VARCHAR(255) PRIMARY KEY,
     product_id         VARCHAR(255) NOT NULL,
     currency           VARCHAR(10)  NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE stripeflow_prices (
     FOREIGN KEY (product_id) REFERENCES stripeflow_products(id) ON DELETE CASCADE
 );
 
-CREATE TABLE stripeflow_subscriptions (
+CREATE TABLE IF NOT EXISTS stripeflow_subscriptions (
     id                      VARCHAR(36)  PRIMARY KEY,
     user_id                 VARCHAR(255) NOT NULL UNIQUE,
     stripe_customer_id      VARCHAR(255) UNIQUE,
@@ -53,7 +53,7 @@ CREATE TABLE stripeflow_subscriptions (
 CREATE INDEX stripeflow_subs_customer ON stripeflow_subscriptions(stripe_customer_id);
 CREATE INDEX stripeflow_subs_sub_id   ON stripeflow_subscriptions(stripe_subscription_id);
 
-CREATE TABLE stripeflow_webhook_events (
+CREATE TABLE IF NOT EXISTS stripeflow_webhook_events (
     id          VARCHAR(255) PRIMARY KEY,
     type        VARCHAR(100) NOT NULL,
     processed   BOOLEAN      NOT NULL DEFAULT FALSE,

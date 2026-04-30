@@ -3,7 +3,7 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Products synced from Stripe
-CREATE TABLE stripeflow_products (
+CREATE TABLE IF NOT EXISTS stripeflow_products (
     id                TEXT        PRIMARY KEY,  -- Stripe product ID (prod_...)
     name              TEXT        NOT NULL,
     description       TEXT,
@@ -16,7 +16,7 @@ CREATE TABLE stripeflow_products (
 );
 
 -- Prices (each product can have many prices)
-CREATE TABLE stripeflow_prices (
+CREATE TABLE IF NOT EXISTS stripeflow_prices (
     id                 TEXT    PRIMARY KEY,  -- Stripe price ID (price_...)
     product_id         TEXT    NOT NULL REFERENCES stripeflow_products(id) ON DELETE CASCADE,
     currency           TEXT    NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE stripeflow_prices (
 );
 
 -- One row per user – tracks Stripe customer + subscription state
-CREATE TABLE stripeflow_subscriptions (
+CREATE TABLE IF NOT EXISTS stripeflow_subscriptions (
     id                      BIGSERIAL   PRIMARY KEY,
     user_id                 TEXT        NOT NULL UNIQUE,
     stripe_customer_id      TEXT        UNIQUE,
@@ -55,7 +55,7 @@ CREATE TABLE stripeflow_subscriptions (
 );
 
 -- Append-only log of processed Stripe webhook events (idempotency)
-CREATE TABLE stripeflow_webhook_events (
+CREATE TABLE IF NOT EXISTS stripeflow_webhook_events (
     id          TEXT    PRIMARY KEY,  -- Stripe event ID (evt_...)
     type        TEXT    NOT NULL,
     processed   BOOLEAN NOT NULL DEFAULT FALSE,
@@ -64,8 +64,8 @@ CREATE TABLE stripeflow_webhook_events (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX stripeflow_subs_customer ON stripeflow_subscriptions(stripe_customer_id);
-CREATE INDEX stripeflow_subs_sub_id   ON stripeflow_subscriptions(stripe_subscription_id);
+CREATE INDEX IF NOT EXISTS stripeflow_subs_customer ON stripeflow_subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS stripeflow_subs_sub_id   ON stripeflow_subscriptions(stripe_subscription_id);
 -- +goose StatementEnd
 
 -- +goose Down

@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE stripeflow_products (
+CREATE TABLE IF NOT EXISTS stripeflow_products (
     id                TEXT    PRIMARY KEY,
     name              TEXT    NOT NULL,
     description       TEXT,
@@ -12,7 +12,7 @@ CREATE TABLE stripeflow_products (
     updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE stripeflow_prices (
+CREATE TABLE IF NOT EXISTS stripeflow_prices (
     id                 TEXT    PRIMARY KEY,
     product_id         TEXT    NOT NULL REFERENCES stripeflow_products(id) ON DELETE CASCADE,
     currency           TEXT    NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE stripeflow_prices (
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE stripeflow_subscriptions (
+CREATE TABLE IF NOT EXISTS stripeflow_subscriptions (
     id                      INTEGER  PRIMARY KEY AUTOINCREMENT,
     user_id                 TEXT     NOT NULL UNIQUE,
     stripe_customer_id      TEXT     UNIQUE,
@@ -49,10 +49,10 @@ CREATE TABLE stripeflow_subscriptions (
     updated_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX stripeflow_subs_customer ON stripeflow_subscriptions(stripe_customer_id);
-CREATE INDEX stripeflow_subs_sub_id   ON stripeflow_subscriptions(stripe_subscription_id);
+CREATE INDEX IF NOT EXISTS stripeflow_subs_customer ON stripeflow_subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS stripeflow_subs_sub_id   ON stripeflow_subscriptions(stripe_subscription_id);
 
-CREATE TABLE stripeflow_webhook_events (
+CREATE TABLE IF NOT EXISTS stripeflow_webhook_events (
     id          TEXT    PRIMARY KEY,
     type        TEXT    NOT NULL,
     processed   INTEGER NOT NULL DEFAULT 0,

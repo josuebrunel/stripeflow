@@ -74,15 +74,15 @@ var pgQueries = queries{
 		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}')::jsonb,NOW())
 		ON CONFLICT (user_id) DO UPDATE SET
-		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
-		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
-		    stripe_price_id         = EXCLUDED.stripe_price_id,
-		    stripe_product_id       = EXCLUDED.stripe_product_id,
+		    stripe_customer_id      = COALESCE(NULLIF(EXCLUDED.stripe_customer_id, ''), stripeflow_subscriptions.stripe_customer_id),
+		    stripe_subscription_id  = COALESCE(NULLIF(EXCLUDED.stripe_subscription_id, ''), stripeflow_subscriptions.stripe_subscription_id),
+		    stripe_price_id         = COALESCE(NULLIF(EXCLUDED.stripe_price_id, ''), stripeflow_subscriptions.stripe_price_id),
+		    stripe_product_id       = COALESCE(NULLIF(EXCLUDED.stripe_product_id, ''), stripeflow_subscriptions.stripe_product_id),
 		    status                  = EXCLUDED.status,
-		    trial_ends_at           = EXCLUDED.trial_ends_at,
-		    current_period_start    = EXCLUDED.current_period_start,
-		    current_period_end      = EXCLUDED.current_period_end,
-		    canceled_at             = EXCLUDED.canceled_at,
+		    trial_ends_at           = COALESCE(EXCLUDED.trial_ends_at, stripeflow_subscriptions.trial_ends_at),
+		    current_period_start    = COALESCE(EXCLUDED.current_period_start, stripeflow_subscriptions.current_period_start),
+		    current_period_end      = COALESCE(EXCLUDED.current_period_end, stripeflow_subscriptions.current_period_end),
+		    canceled_at             = COALESCE(EXCLUDED.canceled_at, stripeflow_subscriptions.canceled_at),
 		    metadata                = EXCLUDED.metadata,
 		    updated_at              = NOW()`,
 
@@ -204,15 +204,15 @@ var myQueries = queries{
 		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'))
 		ON DUPLICATE KEY UPDATE
-		    stripe_customer_id      = VALUES(stripe_customer_id),
-		    stripe_subscription_id  = VALUES(stripe_subscription_id),
-		    stripe_price_id         = VALUES(stripe_price_id),
-		    stripe_product_id       = VALUES(stripe_product_id),
+		    stripe_customer_id      = COALESCE(NULLIF(VALUES(stripe_customer_id), ''), stripe_customer_id),
+		    stripe_subscription_id  = COALESCE(NULLIF(VALUES(stripe_subscription_id), ''), stripe_subscription_id),
+		    stripe_price_id         = COALESCE(NULLIF(VALUES(stripe_price_id), ''), stripe_price_id),
+		    stripe_product_id       = COALESCE(NULLIF(VALUES(stripe_product_id), ''), stripe_product_id),
 		    status                  = VALUES(status),
-		    trial_ends_at           = VALUES(trial_ends_at),
-		    current_period_start    = VALUES(current_period_start),
-		    current_period_end      = VALUES(current_period_end),
-		    canceled_at             = VALUES(canceled_at),
+		    trial_ends_at           = COALESCE(VALUES(trial_ends_at), trial_ends_at),
+		    current_period_start    = COALESCE(VALUES(current_period_start), current_period_start),
+		    current_period_end      = COALESCE(VALUES(current_period_end), current_period_end),
+		    canceled_at             = COALESCE(VALUES(canceled_at), canceled_at),
 		    metadata                = VALUES(metadata),
 		    updated_at              = CURRENT_TIMESTAMP`,
 
@@ -315,15 +315,15 @@ var slQueries = queries{
 		     status, trial_ends_at, current_period_start, current_period_end, canceled_at, metadata, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE(?, '{}'),CURRENT_TIMESTAMP)
 		ON CONFLICT (user_id) DO UPDATE SET
-		    stripe_customer_id      = EXCLUDED.stripe_customer_id,
-		    stripe_subscription_id  = EXCLUDED.stripe_subscription_id,
-		    stripe_price_id         = EXCLUDED.stripe_price_id,
-		    stripe_product_id       = EXCLUDED.stripe_product_id,
+		    stripe_customer_id      = COALESCE(NULLIF(EXCLUDED.stripe_customer_id, ''), stripeflow_subscriptions.stripe_customer_id),
+		    stripe_subscription_id  = COALESCE(NULLIF(EXCLUDED.stripe_subscription_id, ''), stripeflow_subscriptions.stripe_subscription_id),
+		    stripe_price_id         = COALESCE(NULLIF(EXCLUDED.stripe_price_id, ''), stripeflow_subscriptions.stripe_price_id),
+		    stripe_product_id       = COALESCE(NULLIF(EXCLUDED.stripe_product_id, ''), stripeflow_subscriptions.stripe_product_id),
 		    status                  = EXCLUDED.status,
-		    trial_ends_at           = EXCLUDED.trial_ends_at,
-		    current_period_start    = EXCLUDED.current_period_start,
-		    current_period_end      = EXCLUDED.current_period_end,
-		    canceled_at             = EXCLUDED.canceled_at,
+		    trial_ends_at           = COALESCE(EXCLUDED.trial_ends_at, stripeflow_subscriptions.trial_ends_at),
+		    current_period_start    = COALESCE(EXCLUDED.current_period_start, stripeflow_subscriptions.current_period_start),
+		    current_period_end      = COALESCE(EXCLUDED.current_period_end, stripeflow_subscriptions.current_period_end),
+		    canceled_at             = COALESCE(EXCLUDED.canceled_at, stripeflow_subscriptions.canceled_at),
 		    metadata                = EXCLUDED.metadata,
 		    updated_at              = CURRENT_TIMESTAMP`,
 

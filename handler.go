@@ -319,46 +319,46 @@ func (c *Client) dispatchEvent(ctx context.Context, event *stripe.Event) error {
 	slog.Debug("webhook: dispatching event", "type", event.Type)
 	switch event.Type {
 
-	case "customer.subscription.created", "customer.subscription.updated":
+	case stripe.EventTypeCustomerSubscriptionCreated, stripe.EventTypeCustomerSubscriptionUpdated:
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 			return fmt.Errorf("unmarshal subscription event: %w", err)
 		}
 		return c.onSubscriptionUpdated(ctx, &sub)
 
-	case "customer.subscription.deleted":
+	case stripe.EventTypeCustomerSubscriptionDeleted:
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 			return fmt.Errorf("unmarshal subscription.deleted: %w", err)
 		}
 		return c.onSubscriptionDeleted(ctx, &sub)
 
-	case "customer.subscription.trial_will_end":
+	case stripe.EventTypeCustomerSubscriptionTrialWillEnd:
 		// Informational – hook via OnEvent for reminder emails.
 		return nil
 
-	case "invoice.payment_succeeded":
+	case stripe.EventTypeInvoicePaid, stripe.EventTypeInvoicePaymentSucceeded:
 		var inv stripe.Invoice
 		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
-			return fmt.Errorf("unmarshal invoice.payment_succeeded: %w", err)
+			return fmt.Errorf("unmarshal invoice event: %w", err)
 		}
 		return c.onInvoicePaymentSucceeded(ctx, &inv)
 
-	case "invoice.payment_failed":
+	case stripe.EventTypeInvoicePaymentFailed:
 		var inv stripe.Invoice
 		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
 			return fmt.Errorf("unmarshal invoice.payment_failed: %w", err)
 		}
 		return c.onInvoicePaymentFailed(ctx, &inv)
 
-	case "product.created", "product.updated":
+	case stripe.EventTypeProductCreated, stripe.EventTypeProductUpdated:
 		var prod stripe.Product
 		if err := json.Unmarshal(event.Data.Raw, &prod); err != nil {
 			return fmt.Errorf("unmarshal product event: %w", err)
 		}
 		return c.onProductUpserted(ctx, &prod)
 
-	case "product.deleted":
+	case stripe.EventTypeProductDeleted:
 		var prod stripe.Product
 		if err := json.Unmarshal(event.Data.Raw, &prod); err != nil {
 			return fmt.Errorf("unmarshal product.deleted: %w", err)
@@ -366,14 +366,14 @@ func (c *Client) dispatchEvent(ctx context.Context, event *stripe.Event) error {
 		prod.Active = false
 		return c.onProductUpserted(ctx, &prod)
 
-	case "price.created", "price.updated":
+	case stripe.EventTypePriceCreated, stripe.EventTypePriceUpdated:
 		var p stripe.Price
 		if err := json.Unmarshal(event.Data.Raw, &p); err != nil {
 			return fmt.Errorf("unmarshal price event: %w", err)
 		}
 		return c.onPriceUpserted(ctx, &p)
 
-	case "price.deleted":
+	case stripe.EventTypePriceDeleted:
 		var p stripe.Price
 		if err := json.Unmarshal(event.Data.Raw, &p); err != nil {
 			return fmt.Errorf("unmarshal price.deleted: %w", err)
@@ -476,14 +476,10 @@ func (c *Client) onInvoicePaymentSucceeded(ctx context.Context, inv *stripe.Invo
 		return nil // not our user
 	}
 
-	// In v82, subscription reference is nested under Parent.SubscriptionDetails.
-	var subID string
-	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil && inv.Parent.SubscriptionDetails.Subscription != nil {
-		subID = inv.Parent.SubscriptionDetails.Subscription.ID
-	}
+	subID := c.extractSubscriptionID(inv)
 
 	// Multi-subscription fix: if the invoice is for a different active subscription, ignore this webhook
-	if existing.StripeSubscriptionID != "" && existing.StripeSubscriptionID != subID && existing.IsActive() {
+	if subID != "" && existing.StripeSubscriptionID != "" && existing.StripeSubscriptionID != subID && existing.IsActive() {
 		return nil
 	}
 
@@ -513,21 +509,37 @@ func (c *Client) onInvoicePaymentFailed(ctx context.Context, inv *stripe.Invoice
 		return nil
 	}
 
-	var subID string
-	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil && inv.Parent.SubscriptionDetails.Subscription != nil {
-		subID = inv.Parent.SubscriptionDetails.Subscription.ID
-	}
+	subID := c.extractSubscriptionID(inv)
 
 	// Multi-subscription fix: if the invoice is for a different active subscription, ignore this webhook
-	if existing.StripeSubscriptionID != "" && existing.StripeSubscriptionID != subID && existing.IsActive() {
+	if subID != "" && existing.StripeSubscriptionID != "" && existing.StripeSubscriptionID != subID && existing.IsActive() {
 		return nil
 	}
+
 	return c.repo.upsertSubscription(ctx, upsertSubParams{
 		UserID:               existing.UserID,
 		StripeCustomerID:     inv.Customer.ID,
 		StripeSubscriptionID: subID,
 		Status:               StatusPastDue,
 	})
+}
+
+func (c *Client) extractSubscriptionID(inv *stripe.Invoice) string {
+	// In v82, subscription reference is nested under Parent.SubscriptionDetails.
+	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil && inv.Parent.SubscriptionDetails.Subscription != nil {
+		return inv.Parent.SubscriptionDetails.Subscription.ID
+	}
+
+	// Try lines
+	if inv.Lines != nil {
+		for _, line := range inv.Lines.Data {
+			if line.Subscription != nil {
+				return line.Subscription.ID
+			}
+		}
+	}
+
+	return ""
 }
 
 func (c *Client) onProductUpserted(ctx context.Context, prod *stripe.Product) error {

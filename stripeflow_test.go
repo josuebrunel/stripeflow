@@ -586,3 +586,56 @@ func TestDeleteOperations(t *testing.T) {
 		}
 	})
 }
+
+func TestUpsertIdempotency(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t, "sqlite", ":memory:")
+	defer db.Close()
+	sf := newTestClient(t, db, SQLite)
+
+	userID := "test-user-idempotency"
+	custID := "cus_123"
+	subID := "sub_456"
+
+	// 1. Initial upsert with customer ID
+	err := sf.repo.upsertSubscription(ctx, upsertSubParams{
+		UserID:           userID,
+		StripeCustomerID: custID,
+		Status:           StatusNone,
+	})
+	if err != nil {
+		t.Fatalf("Initial upsert failed: %v", err)
+	}
+
+	sub, err := sf.GetSubscription(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetSubscription failed: %v", err)
+	}
+	if sub.StripeCustomerID != custID {
+		t.Fatalf("Expected customer ID %s, got %s", custID, sub.StripeCustomerID)
+	}
+
+	// 2. Upsert with subscription ID but empty customer ID
+	err = sf.repo.upsertSubscription(ctx, upsertSubParams{
+		UserID:               userID,
+		StripeSubscriptionID: subID,
+		Status:               StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Second upsert failed: %v", err)
+	}
+
+	sub, err = sf.GetSubscription(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetSubscription failed: %v", err)
+	}
+	if sub.StripeCustomerID != custID {
+		t.Fatalf("Customer ID was cleared! Expected %s, got %s", custID, sub.StripeCustomerID)
+	}
+	if sub.StripeSubscriptionID != subID {
+		t.Fatalf("Expected subscription ID %s, got %s", subID, sub.StripeSubscriptionID)
+	}
+	if sub.Status != StatusActive {
+		t.Fatalf("Expected status active, got %s", sub.Status)
+	}
+}

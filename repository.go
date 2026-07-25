@@ -16,15 +16,16 @@ import (
 
 type queries struct {
 	// Subscriptions
-	upsertSub         string
-	findSubByUser     string
-	findSubByCustomer string
-	findSubByStripeID string
-	findSubByID       string
-	incrementUsage    string
-	setUsageLimit     string
-	resetUsage        string
-	deleteSub         string
+	upsertSub          string
+	findSubByUser      string
+	findSubByCustomer  string
+	findSubByStripeID  string
+	findSubByID        string
+	incrementUsage     string
+	setUsageLimit      string
+	resetUsage         string
+	deleteSub          string
+	clearStripeLinkage string
 
 	// Products
 	upsertProduct          string
@@ -132,6 +133,13 @@ var pgQueries = queries{
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = NOW() WHERE user_id = $1`,
 
 	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = $1`,
+
+	clearStripeLinkage: `
+		UPDATE stripeflow_subscriptions
+		SET stripe_customer_id = NULL, stripe_subscription_id = NULL,
+		    stripe_price_id = NULL, stripe_product_id = NULL,
+		    status = 'none', updated_at = NOW()
+		WHERE user_id = $1`,
 
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
@@ -263,6 +271,13 @@ var myQueries = queries{
 
 	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = ?`,
 
+	clearStripeLinkage: `
+		UPDATE stripeflow_subscriptions
+		SET stripe_customer_id = NULL, stripe_subscription_id = NULL,
+		    stripe_price_id = NULL, stripe_product_id = NULL,
+		    status = 'none', updated_at = NOW()
+		WHERE user_id = ?`,
+
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
 		VALUES (?,?,?,?,COALESCE(?, '{}'),COALESCE(?, '[]'),?,NOW())
@@ -377,6 +392,13 @@ var slQueries = queries{
 		UPDATE stripeflow_subscriptions SET usage_count = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
 
 	deleteSub: `DELETE FROM stripeflow_subscriptions WHERE user_id = ?`,
+
+	clearStripeLinkage: `
+		UPDATE stripeflow_subscriptions
+		SET stripe_customer_id = NULL, stripe_subscription_id = NULL,
+		    stripe_price_id = NULL, stripe_product_id = NULL,
+		    status = 'none', updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ?`,
 
 	upsertProduct: `
 		INSERT INTO stripeflow_products (id, name, description, active, metadata, features, stripe_created_at, updated_at)
@@ -560,6 +582,16 @@ func (r *repository) resetUsage(ctx context.Context, userID string) error {
 
 func (r *repository) deleteSubscription(ctx context.Context, userID string) error {
 	_, err := r.db.ExecContext(ctx, r.q.deleteSub, userID)
+	return err
+}
+
+// clearStripeLinkage resets a user's Stripe customer/subscription/price/
+// product references and status to "none" without discarding the row
+// itself, preserving usage counters and history. Use this when the Stripe
+// side of the linkage is known stale (e.g. the customer was deleted on
+// Stripe) rather than deleteSubscription, which destroys the whole record.
+func (r *repository) clearStripeLinkage(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, r.q.clearStripeLinkage, userID)
 	return err
 }
 

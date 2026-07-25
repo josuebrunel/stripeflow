@@ -764,3 +764,47 @@ func TestWebhookHandlerErrorSemantics(t *testing.T) {
 		t.Error("onInvoicePaymentFailed: expected transient DB error to propagate, got nil")
 	}
 }
+
+// TestClearStripeLinkage verifies that clearing a stale Stripe linkage (used
+// when Stripe reports the customer as deleted) resets only the Stripe-side
+// fields and status, preserving usage history rather than destroying the row
+// the way deleteSubscription does.
+func TestClearStripeLinkage(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t, "sqlite", ":memory:")
+	defer db.Close()
+	sf := newTestClient(t, db, SQLite)
+
+	userID := "test-user-clear-linkage"
+	if err := sf.repo.upsertSubscription(ctx, upsertSubParams{
+		UserID:               userID,
+		StripeCustomerID:     "cus_gone",
+		StripeSubscriptionID: "sub_gone",
+		StripePriceID:        "price_gone",
+		StripeProductID:      "prod_gone",
+		Status:               StatusActive,
+	}); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+	if _, err := sf.repo.incrementUsage(ctx, userID, 42); err != nil {
+		t.Fatalf("seed usage: %v", err)
+	}
+
+	if err := sf.repo.clearStripeLinkage(ctx, userID); err != nil {
+		t.Fatalf("clearStripeLinkage: %v", err)
+	}
+
+	sub, err := sf.repo.getSubscriptionByUserID(ctx, userID)
+	if err != nil {
+		t.Fatalf("getSubscriptionByUserID: %v", err)
+	}
+	if sub.StripeCustomerID != "" || sub.StripeSubscriptionID != "" || sub.StripePriceID != "" || sub.StripeProductID != "" {
+		t.Fatalf("expected all Stripe linkage fields cleared, got %+v", sub)
+	}
+	if sub.Status != StatusNone {
+		t.Fatalf("expected status reset to none, got %s", sub.Status)
+	}
+	if sub.UsageCount != 42 {
+		t.Fatalf("expected usage history preserved (42), got %d", sub.UsageCount)
+	}
+}

@@ -174,10 +174,12 @@ func (c *Client) CreatePortalSession(ctx context.Context, p PortalParams) (strin
 	}
 	sess, err := session.New(params)
 	if err != nil {
-		// If the error is because the customer was deleted on Stripe but exists in our DB
+		// If the error is because the customer was deleted on Stripe but exists in our DB,
+		// clear the stale linkage rather than destroying the whole row (usage counters,
+		// historical price/product IDs, etc. are still meaningful even without a live customer).
 		if stripeErr, ok := err.(*stripe.Error); ok && stripeErr.Code == stripe.ErrorCodeResourceMissing {
-			slog.Warn("stripeflow: customer not found on Stripe, removing local subscription", "customer_id", sub.StripeCustomerID)
-			_ = c.repo.deleteSubscription(ctx, p.UserID)
+			slog.Warn("stripeflow: customer not found on Stripe, clearing local linkage", "customer_id", sub.StripeCustomerID)
+			_ = c.repo.clearStripeLinkage(ctx, p.UserID)
 		}
 		return "", fmt.Errorf("stripeflow: create portal session: %w", err)
 	}

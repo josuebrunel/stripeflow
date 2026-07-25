@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stripe/stripe-go/v82"
+
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
@@ -701,5 +703,64 @@ func TestWebhookEventRetry(t *testing.T) {
 	}
 	if !already {
 		t.Fatalf("a successfully processed event should be skipped on redelivery")
+	}
+}
+
+// TestWebhookHandlerErrorSemantics verifies that event handlers distinguish
+// permanent conditions (unknown/missing customer — retrying can't help, so
+// the event should be dropped with a nil error) from transient failures
+// (e.g. a DB error — the event should propagate an error so the caller
+// returns 500 and Stripe retries).
+func TestWebhookHandlerErrorSemantics(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t, "sqlite", ":memory:")
+	sf := newTestClient(t, db, SQLite)
+
+	unknownSub := &stripe.Subscription{
+		ID:       "sub_unknown",
+		Customer: &stripe.Customer{ID: "cus_unknown"},
+		Status:   stripe.SubscriptionStatusActive,
+	}
+	if err := sf.onSubscriptionUpdated(ctx, unknownSub); err != nil {
+		t.Errorf("onSubscriptionUpdated: expected nil for unknown customer (permanent), got %v", err)
+	}
+	if err := sf.onSubscriptionDeleted(ctx, unknownSub); err != nil {
+		t.Errorf("onSubscriptionDeleted: expected nil for unknown customer (permanent), got %v", err)
+	}
+
+	unknownInv := &stripe.Invoice{Customer: &stripe.Customer{ID: "cus_unknown"}}
+	if err := sf.onInvoicePaymentSucceeded(ctx, unknownInv); err != nil {
+		t.Errorf("onInvoicePaymentSucceeded: expected nil for unknown customer (permanent), got %v", err)
+	}
+	if err := sf.onInvoicePaymentFailed(ctx, unknownInv); err != nil {
+		t.Errorf("onInvoicePaymentFailed: expected nil for unknown customer (permanent), got %v", err)
+	}
+
+	// A subscription event with no Customer at all must not panic and must
+	// be treated as a permanent no-op.
+	noCustomerSub := &stripe.Subscription{ID: "sub_no_customer"}
+	if err := sf.onSubscriptionUpdated(ctx, noCustomerSub); err != nil {
+		t.Errorf("onSubscriptionUpdated: expected nil for missing customer, got %v", err)
+	}
+	if err := sf.onSubscriptionDeleted(ctx, noCustomerSub); err != nil {
+		t.Errorf("onSubscriptionDeleted: expected nil for missing customer, got %v", err)
+	}
+
+	// A transient failure (DB unavailable) must propagate as a real error,
+	// not be swallowed like the permanent case above.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if err := sf.onSubscriptionUpdated(ctx, unknownSub); err == nil {
+		t.Error("onSubscriptionUpdated: expected transient DB error to propagate, got nil")
+	}
+	if err := sf.onSubscriptionDeleted(ctx, unknownSub); err == nil {
+		t.Error("onSubscriptionDeleted: expected transient DB error to propagate, got nil")
+	}
+	if err := sf.onInvoicePaymentSucceeded(ctx, unknownInv); err == nil {
+		t.Error("onInvoicePaymentSucceeded: expected transient DB error to propagate, got nil")
+	}
+	if err := sf.onInvoicePaymentFailed(ctx, unknownInv); err == nil {
+		t.Error("onInvoicePaymentFailed: expected transient DB error to propagate, got nil")
 	}
 }

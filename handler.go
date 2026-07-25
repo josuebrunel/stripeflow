@@ -3,6 +3,7 @@ package stripeflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -404,9 +405,19 @@ func (c *Client) dispatchEvent(ctx context.Context, event *stripe.Event) error {
 // --------------------------------------------------------------------------
 
 func (c *Client) onSubscriptionUpdated(ctx context.Context, sub *stripe.Subscription) error {
+	if sub.Customer == nil {
+		slog.Warn("webhook: subscription event missing customer, dropping", "subscription", sub.ID)
+		return nil
+	}
 	existing, err := c.repo.getSubscriptionByCustomerID(ctx, sub.Customer.ID)
 	if err != nil {
-		return fmt.Errorf("stripeflow: subscription updated but customer unknown: %w", err)
+		if errors.Is(err, ErrNoSubscription) {
+			// Permanent: no local record exists for this customer, and
+			// nothing about retrying this event will change that.
+			slog.Warn("webhook: subscription updated for unknown customer, dropping", "customer_id", sub.Customer.ID, "subscription", sub.ID)
+			return nil
+		}
+		return fmt.Errorf("stripeflow: subscription updated: lookup customer: %w", err)
 	}
 
 	// Multi-subscription fix: if the DB has a different active subscription, ignore this webhook
@@ -460,9 +471,16 @@ func (c *Client) onSubscriptionUpdated(ctx context.Context, sub *stripe.Subscrip
 }
 
 func (c *Client) onSubscriptionDeleted(ctx context.Context, sub *stripe.Subscription) error {
+	if sub.Customer == nil {
+		slog.Warn("webhook: subscription.deleted event missing customer, dropping", "subscription", sub.ID)
+		return nil
+	}
 	existing, err := c.repo.getSubscriptionByCustomerID(ctx, sub.Customer.ID)
 	if err != nil {
-		return nil // already unknown
+		if errors.Is(err, ErrNoSubscription) {
+			return nil // already unknown locally, nothing to do
+		}
+		return fmt.Errorf("stripeflow: subscription deleted: lookup customer: %w", err)
 	}
 
 	// Multi-subscription fix: only mark as canceled if the deleted subscription matches the current one
@@ -486,7 +504,10 @@ func (c *Client) onInvoicePaymentSucceeded(ctx context.Context, inv *stripe.Invo
 	}
 	existing, err := c.repo.getSubscriptionByCustomerID(ctx, inv.Customer.ID)
 	if err != nil {
-		return nil // not our user
+		if errors.Is(err, ErrNoSubscription) {
+			return nil // not our user
+		}
+		return fmt.Errorf("stripeflow: invoice payment succeeded: lookup customer: %w", err)
 	}
 
 	subID := c.extractSubscriptionID(inv)
@@ -519,7 +540,10 @@ func (c *Client) onInvoicePaymentFailed(ctx context.Context, inv *stripe.Invoice
 	}
 	existing, err := c.repo.getSubscriptionByCustomerID(ctx, inv.Customer.ID)
 	if err != nil {
-		return nil
+		if errors.Is(err, ErrNoSubscription) {
+			return nil // not our user
+		}
+		return fmt.Errorf("stripeflow: invoice payment failed: lookup customer: %w", err)
 	}
 
 	subID := c.extractSubscriptionID(inv)

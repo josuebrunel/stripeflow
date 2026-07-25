@@ -40,8 +40,9 @@ type queries struct {
 	listPricesByProduct string
 
 	// Webhook idempotency
-	markEventProcessing string
-	markEventDone       string
+	markEventProcessing    string
+	markEventDone          string
+	findWebhookEventStatus string
 
 	// Dialect hint
 	isPostgres bool
@@ -189,6 +190,9 @@ var pgQueries = queries{
 		UPDATE stripeflow_webhook_events
 		SET processed = TRUE, error = NULLIF($2,'')
 		WHERE id = $1`,
+
+	findWebhookEventStatus: `
+		SELECT processed, COALESCE(error, '') FROM stripeflow_webhook_events WHERE id = $1`,
 }
 
 // --------------------------------------------------------------------------
@@ -302,6 +306,9 @@ var myQueries = queries{
 
 	markEventDone: `
 		UPDATE stripeflow_webhook_events SET processed = TRUE, error = NULLIF(?,''  ) WHERE id = ?`,
+
+	findWebhookEventStatus: `
+		SELECT processed, COALESCE(error, '') FROM stripeflow_webhook_events WHERE id = ?`,
 }
 
 // --------------------------------------------------------------------------
@@ -416,6 +423,9 @@ var slQueries = queries{
 
 	markEventDone: `
 		UPDATE stripeflow_webhook_events SET processed = 1, error = NULLIF(?,''  ) WHERE id = ?`,
+
+	findWebhookEventStatus: `
+		SELECT processed, COALESCE(error, '') FROM stripeflow_webhook_events WHERE id = ?`,
 }
 
 // --------------------------------------------------------------------------
@@ -655,14 +665,28 @@ func (r *repository) listPricesForProduct(ctx context.Context, productID string)
 // Webhook idempotency helpers
 // --------------------------------------------------------------------------
 
-// markEventProcessing inserts the event ID. Returns true if it was already present.
+// markEventProcessing records that we're about to process eventID. It returns
+// alreadyProcessed=true only if a prior attempt for this exact event already
+// completed successfully — a row that exists but is unprocessed (e.g. the
+// process crashed mid-handling) or failed (recorded an error) is treated as
+// not yet done, so a Stripe retry gets a real chance to reprocess it instead
+// of being silently swallowed.
 func (r *repository) markEventProcessing(ctx context.Context, eventID, eventType string) (alreadyProcessed bool, err error) {
 	res, err := r.db.ExecContext(ctx, r.q.markEventProcessing, eventID, eventType)
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n == 0, nil
+	if n, _ := res.RowsAffected(); n > 0 {
+		return false, nil
+	}
+
+	var processed bool
+	var errStr string
+	row := r.db.QueryRowContext(ctx, r.q.findWebhookEventStatus, eventID)
+	if err := row.Scan(&processed, &errStr); err != nil {
+		return false, err
+	}
+	return processed && errStr == "", nil
 }
 
 func (r *repository) markEventDone(ctx context.Context, eventID string, processingErr error) error {
@@ -670,11 +694,13 @@ func (r *repository) markEventDone(ctx context.Context, eventID string, processi
 	if processingErr != nil {
 		errStr = processingErr.Error()
 	}
-	if r.q.isMySQL {
-		_, err := r.db.ExecContext(ctx, r.q.markEventDone, errStr, eventID)
+	if r.q.isPostgres {
+		// Postgres uses named placeholders ($1=id, $2=error).
+		_, err := r.db.ExecContext(ctx, r.q.markEventDone, eventID, errStr)
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, r.q.markEventDone, eventID, errStr)
+	// MySQL and SQLite both use positional placeholders in (error, id) order.
+	_, err := r.db.ExecContext(ctx, r.q.markEventDone, errStr, eventID)
 	return err
 }
 

@@ -299,7 +299,7 @@ func (c *Client) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	processingErr := c.dispatchEvent(ctx, &event)
+	processingErr := c.safeDispatchEvent(ctx, &event)
 	_ = c.repo.markEventDone(ctx, event.ID, processingErr)
 
 	if processingErr != nil {
@@ -313,6 +313,19 @@ func (c *Client) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// safeDispatchEvent wraps dispatchEvent with panic recovery so a bug in a
+// single event handler produces a clean 500 with a logged error instead of
+// crashing the connection with no response — the panic message is recorded
+// via markEventDone just like any other processing error.
+func (c *Client) safeDispatchEvent(ctx context.Context, event *stripe.Event) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("stripeflow: panic processing webhook event %s: %v", event.Type, p)
+		}
+	}()
+	return c.dispatchEvent(ctx, event)
 }
 
 func (c *Client) dispatchEvent(ctx context.Context, event *stripe.Event) error {

@@ -337,18 +337,28 @@ func testWebhookIdempotency(t *testing.T, sf *Client) {
 		t.Fatal("expected alreadyProcessed=false on first insert")
 	}
 
-	// Second insert → already processed.
+	// Redelivery before the first attempt finished → must be retryable, not
+	// silently swallowed (e.g. the process crashed mid-handling).
 	already, err = sf.repo.markEventProcessing(ctx, "evt_test_001", "invoice.payment_succeeded")
 	if err != nil {
-		t.Fatalf("markEventProcessing (second): %v", err)
+		t.Fatalf("markEventProcessing (before done): %v", err)
 	}
-	if !already {
-		t.Fatal("expected alreadyProcessed=true on duplicate")
+	if already {
+		t.Fatal("expected alreadyProcessed=false while the first attempt is still unfinished")
 	}
 
-	// Mark done.
+	// Mark done (success).
 	if err := sf.repo.markEventDone(ctx, "evt_test_001", nil); err != nil {
 		t.Fatalf("markEventDone: %v", err)
+	}
+
+	// Redelivery after a successful attempt → skipped.
+	already, err = sf.repo.markEventProcessing(ctx, "evt_test_001", "invoice.payment_succeeded")
+	if err != nil {
+		t.Fatalf("markEventProcessing (after done): %v", err)
+	}
+	if !already {
+		t.Fatal("expected alreadyProcessed=true after a successful attempt")
 	}
 }
 
@@ -637,5 +647,59 @@ func TestUpsertIdempotency(t *testing.T) {
 	}
 	if sub.Status != StatusActive {
 		t.Fatalf("Expected status active, got %s", sub.Status)
+	}
+}
+
+// TestWebhookEventRetry verifies that a failed or never-finished processing
+// attempt is retryable on redelivery, while a successfully processed event
+// is correctly skipped. Previously markEventProcessing only checked whether
+// the event row existed, so ANY prior attempt (success or failure, finished
+// or crashed mid-handling) permanently blocked reprocessing on retry.
+func TestWebhookEventRetry(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t, "sqlite", ":memory:")
+	defer db.Close()
+	sf := newTestClient(t, db, SQLite)
+
+	// A never-finished attempt (e.g. the process crashed mid-handling, or a
+	// panic occurred before recovery was added) must be retryable.
+	already, err := sf.repo.markEventProcessing(ctx, "evt_stuck", "customer.subscription.updated")
+	if err != nil {
+		t.Fatalf("markEventProcessing (first attempt): %v", err)
+	}
+	if already {
+		t.Fatalf("expected a fresh event to not be marked already-processed")
+	}
+	// Simulate a crash: markEventDone is never called for this attempt.
+	already, err = sf.repo.markEventProcessing(ctx, "evt_stuck", "customer.subscription.updated")
+	if err != nil {
+		t.Fatalf("markEventProcessing (retry after crash): %v", err)
+	}
+	if already {
+		t.Fatalf("a never-finished attempt must be retryable, but was reported as already processed")
+	}
+
+	// A finished attempt that failed must also be retryable.
+	if err := sf.repo.markEventDone(ctx, "evt_stuck", errors.New("transient db error")); err != nil {
+		t.Fatalf("markEventDone: %v", err)
+	}
+	already, err = sf.repo.markEventProcessing(ctx, "evt_stuck", "customer.subscription.updated")
+	if err != nil {
+		t.Fatalf("markEventProcessing (retry after failure): %v", err)
+	}
+	if already {
+		t.Fatalf("a failed attempt must be retryable, but was reported as already processed")
+	}
+
+	// A finished, successful attempt must be skipped on redelivery.
+	if err := sf.repo.markEventDone(ctx, "evt_stuck", nil); err != nil {
+		t.Fatalf("markEventDone (success): %v", err)
+	}
+	already, err = sf.repo.markEventProcessing(ctx, "evt_stuck", "customer.subscription.updated")
+	if err != nil {
+		t.Fatalf("markEventProcessing (redelivery after success): %v", err)
+	}
+	if !already {
+		t.Fatalf("a successfully processed event should be skipped on redelivery")
 	}
 }

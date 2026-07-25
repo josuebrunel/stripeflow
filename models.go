@@ -79,9 +79,9 @@ type Price struct {
 	Nickname string
 	// LookupKey is an optional stable string key assigned in Stripe that lets
 	// you reference this price without hardcoding its ID.
-	LookupKey string
-	Active    bool
-	Metadata  *json.RawMessage
+	LookupKey       string
+	Active          bool
+	Metadata        *json.RawMessage
 	StripeCreatedAt *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time

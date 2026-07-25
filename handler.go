@@ -47,6 +47,21 @@ func (c *Client) ensureCustomer(ctx context.Context, userID, email string, meta 
 	}); err != nil {
 		return "", fmt.Errorf("stripeflow: store customer id: %w", err)
 	}
+
+	// A concurrent call for the same user (e.g. a double-submitted checkout)
+	// may have raced us and persisted a different Stripe customer after the
+	// read above. The DB upsert always keeps the latest writer's customer
+	// ID, so re-read and defer to whatever actually landed, cleaning up the
+	// duplicate we just created on Stripe's side rather than returning an
+	// ID that no longer matches the persisted row.
+	final, err := c.repo.getSubscriptionByUserID(ctx, userID)
+	if err == nil && final.StripeCustomerID != "" && final.StripeCustomerID != cust.ID {
+		if _, delErr := customer.Del(cust.ID, nil); delErr != nil {
+			slog.Warn("stripeflow: failed to clean up duplicate stripe customer after concurrent signup", "customer_id", cust.ID, "error", delErr)
+		}
+		return final.StripeCustomerID, nil
+	}
+
 	return cust.ID, nil
 }
 

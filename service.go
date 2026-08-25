@@ -3,8 +3,11 @@ package stripeflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/stripe/stripe-go/v82"
@@ -12,39 +15,37 @@ import (
 	stripeproduct "github.com/stripe/stripe-go/v82/product"
 )
 
-// --------------------------------------------------------------------------
-// Product management
-// --------------------------------------------------------------------------
+var slugInvalidRunRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// CreateProductParams defines a new product to create in Stripe (and sync locally).
-type CreateProductParams struct {
-	Name        string
-	Description string
-	// Images are URLs to product images.
-	Images   []string
-	Metadata map[string]string
+// slugify derives a stable, Stripe-ID-safe identifier from arbitrary text so
+// that creating "the same" product or price twice (by name, or by its
+// economic attributes) reuses the existing Stripe object instead of creating
+// a duplicate.
+func slugify(s string) string {
+	slug := slugInvalidRunRe.ReplaceAllString(strings.ToLower(s), "-")
+	slug = strings.Trim(slug, "-")
+	if len(slug) > 200 {
+		slug = strings.Trim(slug[:200], "-")
+	}
+	return slug
 }
 
-// CreateProduct creates a product in Stripe and stores it locally.
-func (c *Client) CreateProduct(ctx context.Context, p CreateProductParams) (*Product, error) {
-	if p.Name == "" {
-		return nil, fmt.Errorf("stripeflow: product Name is required")
-	}
-
-	params := &stripe.ProductParams{
-		Name:        stripe.String(p.Name),
-		Description: stripe.String(p.Description),
-	}
-	for _, img := range p.Images {
-		params.Images = append(params.Images, stripe.String(img))
-	}
-	for k, v := range p.Metadata {
-		params.AddMetadata(k, v)
-	}
-
+// createOrGetProduct creates a Stripe product using the ID already set on
+// params, or fetches the existing product if that ID is already taken.
+// Stripe enforces uniqueness on custom product IDs account-wide and
+// atomically, so this closes the race a local check-then-create would leave
+// open.
+func (c *Client) createOrGetProduct(ctx context.Context, params *stripe.ProductParams) (*Product, error) {
 	prod, err := stripeproduct.New(params)
 	if err != nil {
-		return nil, fmt.Errorf("stripeflow: stripe create product: %w", err)
+		var stripeErr *stripe.Error
+		if !errors.As(err, &stripeErr) || stripeErr.Code != stripe.ErrorCodeResourceAlreadyExists {
+			return nil, fmt.Errorf("stripeflow: stripe create product: %w", err)
+		}
+		prod, err = stripeproduct.Get(*params.ID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("stripeflow: stripe get existing product: %w", err)
+		}
 	}
 
 	local := Product{
@@ -72,6 +73,121 @@ func (c *Client) CreateProduct(ctx context.Context, p CreateProductParams) (*Pro
 		return nil, fmt.Errorf("stripeflow: store product: %w", err)
 	}
 	return &local, nil
+}
+
+// priceLookupKey derives a stable dedup key for a price from its economic
+// attributes (or nickname, when the caller provides one distinguishing
+// label), so creating "the same" price twice reuses the existing Stripe
+// price instead of creating a duplicate.
+func priceLookupKey(productID, nickname, currency string, unitAmount int64, interval string) string {
+	label := nickname
+	if label == "" {
+		if interval == "" {
+			interval = "onetime"
+		}
+		label = fmt.Sprintf("%s-%d-%s", currency, unitAmount, interval)
+	}
+	return slugify(productID + "-" + label)
+}
+
+// createOrGetPrice creates a Stripe price using the lookup_key already set on
+// params, or reuses the existing price already registered under that key.
+// Unlike products, Stripe prices don't accept a caller-supplied ID, so the
+// dedup check is a list-by-lookup_key before create rather than relying on a
+// server-side uniqueness error.
+func (c *Client) createOrGetPrice(ctx context.Context, productID string, params *stripe.PriceParams) (*Price, error) {
+	lookupKey := *params.LookupKey
+
+	iter := stripeprice.List(&stripe.PriceListParams{
+		LookupKeys: []*string{stripe.String(lookupKey)},
+	})
+	var price *stripe.Price
+	if iter.Next() {
+		price = iter.Price()
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("stripeflow: stripe list prices by lookup_key %q: %w", lookupKey, err)
+	}
+
+	if price == nil {
+		var err error
+		price, err = stripeprice.New(params)
+		if err != nil {
+			return nil, fmt.Errorf("stripeflow: stripe create price: %w", err)
+		}
+	}
+
+	local := Price{
+		ID:        price.ID,
+		ProductID: productID,
+		Currency:  string(price.Currency),
+		Active:    price.Active,
+	}
+	if len(price.Metadata) > 0 {
+		b, _ := json.Marshal(price.Metadata)
+		m := json.RawMessage(b)
+		local.Metadata = &m
+	}
+	if price.UnitAmount != 0 {
+		ua := price.UnitAmount
+		local.UnitAmount = &ua
+	}
+	if price.Recurring != nil {
+		local.RecurringInterval = string(price.Recurring.Interval)
+		count := int(price.Recurring.IntervalCount)
+		local.RecurringCount = &count
+		local.UsageType = string(price.Recurring.UsageType)
+	}
+	local.Type = string(price.Type)
+	local.Nickname = price.Nickname
+	if price.LookupKey != "" {
+		local.LookupKey = price.LookupKey
+	}
+	if price.Created != 0 {
+		t := time.Unix(price.Created, 0)
+		local.StripeCreatedAt = &t
+	}
+
+	if err := c.repo.upsertPrice(ctx, local); err != nil {
+		return nil, fmt.Errorf("stripeflow: store price: %w", err)
+	}
+	return &local, nil
+}
+
+// --------------------------------------------------------------------------
+// Product management
+// --------------------------------------------------------------------------
+
+// CreateProductParams defines a new product to create in Stripe (and sync locally).
+type CreateProductParams struct {
+	Name        string
+	Description string
+	// Images are URLs to product images.
+	Images   []string
+	Metadata map[string]string
+}
+
+// CreateProduct creates a product in Stripe and stores it locally. Calling it
+// again with the same Name reuses the existing Stripe product instead of
+// creating a duplicate.
+func (c *Client) CreateProduct(ctx context.Context, p CreateProductParams) (*Product, error) {
+	if p.Name == "" {
+		return nil, fmt.Errorf("stripeflow: product Name is required")
+	}
+
+	params := &stripe.ProductParams{
+		ID:          stripe.String(slugify(p.Name)),
+		Name:        stripe.String(p.Name),
+		Description: stripe.String(p.Description),
+	}
+	for _, img := range p.Images {
+		params.Images = append(params.Images, stripe.String(img))
+	}
+	for k, v := range p.Metadata {
+		params.AddMetadata(k, v)
+	}
+
+	return c.createOrGetProduct(ctx, params)
 }
 
 // UpdateProductParams describes editable fields on an existing product.
@@ -168,7 +284,9 @@ type RecurringParams struct {
 	IntervalCount int64 // 1 = every interval, 3 = every 3 intervals, etc.
 }
 
-// CreatePrice creates a price in Stripe and stores it locally.
+// CreatePrice creates a price in Stripe and stores it locally. Calling it
+// again for the same product with the same currency/amount/interval reuses
+// the existing Stripe price instead of creating a duplicate.
 func (c *Client) CreatePrice(ctx context.Context, p CreatePriceParams) (*Price, error) {
 	if p.StripeProductID == "" {
 		return nil, fmt.Errorf("stripeflow: StripeProductID is required")
@@ -177,65 +295,29 @@ func (c *Client) CreatePrice(ctx context.Context, p CreatePriceParams) (*Price, 
 		return nil, fmt.Errorf("stripeflow: Currency is required")
 	}
 
+	interval := ""
 	params := &stripe.PriceParams{
 		Product:    stripe.String(p.StripeProductID),
 		UnitAmount: stripe.Int64(p.UnitAmount),
 		Currency:   stripe.String(p.Currency),
 	}
 	if p.Recurring != nil {
+		interval = string(p.Recurring.Interval)
 		count := p.Recurring.IntervalCount
 		if count <= 0 {
 			count = 1
 		}
 		params.Recurring = &stripe.PriceRecurringParams{
-			Interval:      stripe.String(string(p.Recurring.Interval)),
+			Interval:      stripe.String(interval),
 			IntervalCount: stripe.Int64(count),
 		}
 	}
 	for k, v := range p.Metadata {
 		params.AddMetadata(k, v)
 	}
+	params.LookupKey = stripe.String(priceLookupKey(p.StripeProductID, "", p.Currency, p.UnitAmount, interval))
 
-	price, err := stripeprice.New(params)
-	if err != nil {
-		return nil, fmt.Errorf("stripeflow: stripe create price: %w", err)
-	}
-
-	local := Price{
-		ID:        price.ID,
-		ProductID: p.StripeProductID,
-		Currency:  string(price.Currency),
-		Active:    price.Active,
-	}
-	if len(price.Metadata) > 0 {
-		b, _ := json.Marshal(price.Metadata)
-		m := json.RawMessage(b)
-		local.Metadata = &m
-	}
-	if price.UnitAmount != 0 {
-		ua := price.UnitAmount
-		local.UnitAmount = &ua
-	}
-	if price.Recurring != nil {
-		local.RecurringInterval = string(price.Recurring.Interval)
-		count := int(price.Recurring.IntervalCount)
-		local.RecurringCount = &count
-		local.UsageType = string(price.Recurring.UsageType)
-	}
-	local.Type = string(price.Type)
-	local.Nickname = price.Nickname
-	if price.LookupKey != "" {
-		local.LookupKey = price.LookupKey
-	}
-	if price.Created != 0 {
-		t := time.Unix(price.Created, 0)
-		local.StripeCreatedAt = &t
-	}
-
-	if err := c.repo.upsertPrice(ctx, local); err != nil {
-		return nil, fmt.Errorf("stripeflow: store price: %w", err)
-	}
-	return &local, nil
+	return c.createOrGetPrice(ctx, p.StripeProductID, params)
 }
 
 // ArchivePrice marks a price as inactive in Stripe (prices cannot be deleted).

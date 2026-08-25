@@ -5,12 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/stripe/stripe-go/v82"
 	stripemeter "github.com/stripe/stripe-go/v82/billing/meter"
-	stripeprice "github.com/stripe/stripe-go/v82/price"
-	stripeproduct "github.com/stripe/stripe-go/v82/product"
 )
 
 // --------------------------------------------------------------------------
@@ -170,6 +167,7 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 	slog.Info("stripeflow: provisioning product", "name", params.Product.Name)
 
 	prodParams := &stripe.ProductParams{
+		ID:          stripe.String(slugify(params.Product.Name)),
 		Name:        stripe.String(params.Product.Name),
 		Description: stripe.String(params.Product.Description),
 	}
@@ -187,36 +185,21 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 		)
 	}
 
-	prod, err := stripeproduct.New(prodParams)
+	local, err := c.createOrGetProduct(ctx, prodParams)
 	if err != nil {
-		return nil, fmt.Errorf("stripeflow: stripe create product: %w", err)
+		return nil, err
 	}
 
-	// Sync product locally.
-	local := Product{
-		ID:          prod.ID,
-		Name:        prod.Name,
-		Description: prod.Description,
-		Active:      prod.Active,
-	}
-	if prod.Created != 0 {
-		t := time.Unix(prod.Created, 0)
-		local.StripeCreatedAt = &t
-	}
-	if err := c.repo.upsertProduct(ctx, local); err != nil {
-		return nil, fmt.Errorf("stripeflow: store product: %w", err)
-	}
-
-	slog.Info("stripeflow: product created", "product_id", prod.ID)
+	slog.Info("stripeflow: product created", "product_id", local.ID)
 
 	// Phase 2: Create each price.
-	result := &ProvisionResult{ProductID: prod.ID}
+	result := &ProvisionResult{ProductID: local.ID}
 
 	for i, pi := range params.Prices {
 		slog.Info("stripeflow: creating price", "index", i, "nickname", pi.Nickname)
 
 		priceParams := &stripe.PriceParams{
-			Product:    stripe.String(prod.ID),
+			Product:    stripe.String(local.ID),
 			Currency:   stripe.String(pi.Currency),
 			UnitAmount: stripe.Int64(pi.UnitAmount),
 		}
@@ -279,45 +262,21 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 			priceParams.AddMetadata(k, v)
 		}
 
-		price, err := stripeprice.New(priceParams)
+		interval := ""
+		if pi.Recurring != nil {
+			interval = pi.Recurring.Interval
+		}
+		priceParams.LookupKey = stripe.String(priceLookupKey(local.ID, pi.Nickname, pi.Currency, pi.UnitAmount, interval))
+
+		lp, err := c.createOrGetPrice(ctx, local.ID, priceParams)
 		if err != nil {
-			return result, fmt.Errorf("stripeflow: stripe create price %q (index %d): %w", pi.Nickname, i, err)
+			return result, fmt.Errorf("stripeflow: create price %q (index %d): %w", pi.Nickname, i, err)
 		}
 
-		// Sync price locally.
-		lp := Price{
-			ID:        price.ID,
-			ProductID: prod.ID,
-			Currency:  string(price.Currency),
-			Active:    price.Active,
-		}
-		if price.UnitAmount != 0 {
-			ua := price.UnitAmount
-			lp.UnitAmount = &ua
-		}
-		if price.Recurring != nil {
-			lp.RecurringInterval = string(price.Recurring.Interval)
-			count := int(price.Recurring.IntervalCount)
-			lp.RecurringCount = &count
-			lp.UsageType = string(price.Recurring.UsageType)
-		}
-		lp.Type = string(price.Type)
-		lp.Nickname = price.Nickname
-		if price.LookupKey != "" {
-			lp.LookupKey = price.LookupKey
-		}
-		if price.Created != 0 {
-			t := time.Unix(price.Created, 0)
-			lp.StripeCreatedAt = &t
-		}
-		if err := c.repo.upsertPrice(ctx, lp); err != nil {
-			return result, fmt.Errorf("stripeflow: store price %s: %w", price.ID, err)
-		}
-
-		slog.Info("stripeflow: price created", "price_id", price.ID, "nickname", pi.Nickname)
+		slog.Info("stripeflow: price created", "price_id", lp.ID, "nickname", pi.Nickname)
 
 		result.Prices = append(result.Prices, ProvisionPriceInfo{
-			PriceID:  price.ID,
+			PriceID:  lp.ID,
 			Nickname: pi.Nickname,
 		})
 	}

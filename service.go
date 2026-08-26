@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v82"
+	stripemeter "github.com/stripe/stripe-go/v82/billing/meter"
 	stripeprice "github.com/stripe/stripe-go/v82/price"
 	stripeproduct "github.com/stripe/stripe-go/v82/product"
 )
@@ -152,6 +153,34 @@ func (c *Client) createOrGetPrice(ctx context.Context, productID string, params 
 		return nil, fmt.Errorf("stripeflow: store price: %w", err)
 	}
 	return &local, nil
+}
+
+// createOrGetMeter reuses an existing active meter registered under eventName,
+// or creates one if none exists. Like prices, meters don't accept a
+// caller-supplied ID, and the list endpoint doesn't filter by event_name, so
+// the dedup check lists active meters and matches event_name client-side.
+func (c *Client) createOrGetMeter(ctx context.Context, eventName, displayName string) (*stripe.BillingMeter, error) {
+	iter := stripemeter.List(&stripe.BillingMeterListParams{Status: stripe.String("active")})
+	for iter.Next() {
+		if m := iter.BillingMeter(); m.EventName == eventName {
+			return m, nil
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("stripeflow: stripe list meters by event_name %q: %w", eventName, err)
+	}
+
+	m, err := stripemeter.New(&stripe.BillingMeterParams{
+		DisplayName: stripe.String(displayName),
+		EventName:   stripe.String(eventName),
+		DefaultAggregation: &stripe.BillingMeterDefaultAggregationParams{
+			Formula: stripe.String("count"),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("stripeflow: stripe create meter %q: %w", eventName, err)
+	}
+	return m, nil
 }
 
 // --------------------------------------------------------------------------

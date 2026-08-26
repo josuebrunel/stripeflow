@@ -7,7 +7,6 @@ import (
 	"log/slog"
 
 	"github.com/stripe/stripe-go/v82"
-	stripemeter "github.com/stripe/stripe-go/v82/billing/meter"
 )
 
 // --------------------------------------------------------------------------
@@ -232,18 +231,12 @@ func (c *Client) ProvisionProduct(ctx context.Context, params ProvisionParams) (
 					if displayName == "" {
 						displayName = pi.Recurring.MeterEventName
 					}
-					m, err := stripemeter.New(&stripe.BillingMeterParams{
-						DisplayName: stripe.String(displayName),
-						EventName:   stripe.String(pi.Recurring.MeterEventName),
-						DefaultAggregation: &stripe.BillingMeterDefaultAggregationParams{
-							Formula: stripe.String("count"),
-						},
-					})
+					m, err := c.createOrGetMeter(ctx, pi.Recurring.MeterEventName, displayName)
 					if err != nil {
 						return result, fmt.Errorf("stripeflow: failed to create meter %q: %w", pi.Recurring.MeterEventName, err)
 					}
 					priceParams.Recurring.Meter = stripe.String(m.ID)
-					slog.Info("stripeflow: meter auto-created", "meter_id", m.ID, "event_name", pi.Recurring.MeterEventName)
+					slog.Info("stripeflow: meter resolved", "meter_id", m.ID, "event_name", pi.Recurring.MeterEventName)
 				} else if pi.Recurring.Meter != "" {
 					priceParams.Recurring.Meter = stripe.String(pi.Recurring.Meter)
 				}

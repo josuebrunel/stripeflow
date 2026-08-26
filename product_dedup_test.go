@@ -30,9 +30,12 @@ type fakeStripeBackend struct {
 	prices        map[string]map[string]any
 	priceByLookup map[string]string
 	priceSeq      int
+	meters        map[string]map[string]any
+	meterSeq      int
 
 	ProductPOSTs int
 	PricePOSTs   int
+	MeterPOSTs   int
 }
 
 func newFakeStripeBackend(t *testing.T) *fakeStripeBackend {
@@ -42,6 +45,7 @@ func newFakeStripeBackend(t *testing.T) *fakeStripeBackend {
 		products:      map[string]map[string]any{},
 		prices:        map[string]map[string]any{},
 		priceByLookup: map[string]string{},
+		meters:        map[string]map[string]any{},
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(fb.handle))
@@ -76,6 +80,10 @@ func (fb *fakeStripeBackend) handle(w http.ResponseWriter, r *http.Request) {
 		fb.createPrice(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/prices":
 		fb.listPrices(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/billing/meters":
+		fb.createMeter(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/billing/meters":
+		fb.listMeters(w, r)
 	default:
 		http.Error(w, fmt.Sprintf("fake stripe backend: unhandled %s %s", r.Method, r.URL.Path), http.StatusNotImplemented)
 	}
@@ -162,6 +170,36 @@ func (fb *fakeStripeBackend) listPrices(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object":   "list",
 		"url":      "/v1/prices",
+		"has_more": false,
+		"data":     data,
+	})
+}
+
+func (fb *fakeStripeBackend) createMeter(w http.ResponseWriter, r *http.Request) {
+	fb.MeterPOSTs++
+	fb.meterSeq++
+
+	id := fmt.Sprintf("mtr_test_auto_%d", fb.meterSeq)
+	m := map[string]any{
+		"id":           id,
+		"object":       "billing.meter",
+		"status":       "active",
+		"display_name": r.Form.Get("display_name"),
+		"event_name":   r.Form.Get("event_name"),
+		"created":      1700000000,
+	}
+	fb.meters[id] = m
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (fb *fakeStripeBackend) listMeters(w http.ResponseWriter, r *http.Request) {
+	data := []any{}
+	for _, m := range fb.meters {
+		data = append(data, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object":   "list",
+		"url":      "/v1/billing/meters",
 		"has_more": false,
 		"data":     data,
 	})
@@ -331,5 +369,59 @@ func TestProvisionProduct_Dedup(t *testing.T) {
 	}
 	if fb.PricePOSTs != 1 {
 		t.Fatalf("expected exactly 1 POST /v1/prices call (second run should reuse via lookup_key), got %d", fb.PricePOSTs)
+	}
+}
+
+func TestCreateMeter_Dedup(t *testing.T) {
+	db := setupTestDB(t, "sqlite", ":memory:")
+	defer db.Close()
+	sf := newTestClient(t, db, SQLite)
+	fb := newFakeStripeBackend(t)
+	ctx := context.Background()
+
+	params := ProvisionParams{
+		Product: ProvisionProductParams{Name: "My SaaS"},
+		Prices: []ProvisionPriceParams{
+			{
+				Nickname:   "Starter overage",
+				Currency:   "usd",
+				UnitAmount: 8,
+				Recurring: &ProvisionRecurringParams{
+					Interval:       "month",
+					UsageType:      "metered",
+					MeterEventName: "check",
+				},
+			},
+			{
+				Nickname:   "Pro overage",
+				Currency:   "usd",
+				UnitAmount: 4,
+				Recurring: &ProvisionRecurringParams{
+					Interval:       "month",
+					UsageType:      "metered",
+					MeterEventName: "check",
+				},
+			},
+		},
+	}
+
+	res1, err := sf.ProvisionProduct(ctx, params)
+	if err != nil {
+		t.Fatalf("first ProvisionProduct: %v", err)
+	}
+	if fb.MeterPOSTs != 1 {
+		t.Fatalf("expected exactly 1 POST /v1/billing/meters call for 2 prices sharing one event_name, got %d", fb.MeterPOSTs)
+	}
+
+	res2, err := sf.ProvisionProduct(ctx, params)
+	if err != nil {
+		t.Fatalf("second ProvisionProduct: %v", err)
+	}
+	if fb.MeterPOSTs != 1 {
+		t.Fatalf("expected meter to be reused on repeat provisioning, got %d POST /v1/billing/meters calls", fb.MeterPOSTs)
+	}
+
+	if len(res1.Prices) != 2 || len(res2.Prices) != 2 {
+		t.Fatalf("expected 2 prices in each result, got %d and %d", len(res1.Prices), len(res2.Prices))
 	}
 }
